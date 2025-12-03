@@ -1807,7 +1807,9 @@ curl --location 'http://localhost/compute/cluster' \
 kubectl get rayclusters -n ray
 
 # 3. Access Jupyter
-# Open jupyter_link from create response
+# Get Cluster Dashboards link via below API using cluster_id returned in create_cluster response
+curl --location 'http://localhost/compute/cluster/{cluster_id}/dashboards'
+# Access Jupyter notebook at the returned jupyter_lab_url
 
 # 4. Run a job
 # Submit job via Ray dashboard or SDK

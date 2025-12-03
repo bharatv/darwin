@@ -396,9 +396,11 @@ curl --location 'http://localhost/compute/cluster' \
     "user": "user@example.com"
 }'
 
-# Response will include cluster_id, jupyter_link, and dashboard_link
-# Access Jupyter notebook at the returned jupyter_link
-# Monitor cluster at the Ray dashboard_link
+# Response will include cluster_id
+# Get Cluster Dashboards link via below API using cluster_id
+curl --location 'http://localhost/compute/cluster/{cluster_id}/dashboards'
+# Access Jupyter notebook at the returned jupyter_lab_url
+# Monitor Ray cluster at the ray_dashboard_url
 
 # Stop the cluster when done
 curl --location --request POST 'http://localhost/compute/cluster/stop-cluster/{cluster_id}' \
@@ -532,7 +534,7 @@ curl http://localhost/compute/cluster/{cluster_id}/status
 Once the cluster is ready, access the Jupyter notebook at:
 
 ```
-http://localhost:30080/eks-0/{cluster_id}-jupyter
+http://localhost/kind-0/{cluster_id}-jupyter
 ```
 
 Open this URL in your browser to start working in the workspace.

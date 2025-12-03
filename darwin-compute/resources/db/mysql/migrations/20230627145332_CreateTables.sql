@@ -9,10 +9,8 @@ CREATE TABLE IF NOT EXISTS `cluster_status`
     `active_pods`          INT                                                                                                                                                     DEFAULT NULL,
     `available_memory`     INT                                                                                                                                                     DEFAULT NULL,
     `active_cluster_runid` VARCHAR(255)                                                                                                                                            DEFAULT NULL,
-    `last_updated_at`      TIMESTAMP                                                                                                                                      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    `dashboard_link`       VARCHAR(255)                                                                                                                                            DEFAULT NULL,
-    `notebook_link`        VARCHAR(255)                                                                                                                                            DEFAULT NULL,
     `cluster_name`         VARCHAR(255)                                                                                                                                            DEFAULT NULL,
+    `last_updated_at`      TIMESTAMP                                                                                                                                      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `last_picked_at`       TIMESTAMP                                                                                                                                      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `last_used_at`         TIMESTAMP                                                                                                                                      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`cluster_id`),
@@ -136,10 +134,10 @@ INSERT IGNORE INTO `cluster_runtimes` (`runtime`, `image`, `namespace`, `created
 VALUES ('0.0', 'localhost:5000/ray:2.37.0', 'ray', 'Darwin', 'cpu');
 
 INSERT IGNORE INTO `cluster_configs` (`config_key`, `value`)
-VALUES ('cloud_env', 'eks-0'),
-       ('cloud_env_job', 'eks-0'),
-       ('cloud_env_remotekernel', 'eks-0'),
-       ('cloud_env_shs', 'eks-0'),
+VALUES ('cloud_env', 'kind-0'),
+       ('cloud_env_job', 'kind-0'),
+       ('cloud_env_remotekernel', 'kind-0'),
+       ('cloud_env_shs', 'kind-0'),
        ('RSS_TOTAL_FSX_NUM', '1'),
        ('RSS_PER_FSX_CLAIM_NUM', '1');
 
