@@ -399,16 +399,20 @@ curl --location 'http://localhost/compute/cluster' \
     "tags": ["demo"],
     "runtime": "0.0",
     "inactive_time": 30,
+    "start_cluster": true,
     "head_node_config": {
         "cores": 4,
-        "memory": 8
+        "memory": 8,
+        "node_capacity_type": "ondemand"
     },
     "worker_node_configs": [
         {
-            "cores": 2,
-            "memory": 4,
+            "cores_per_pods": 2,
+            "memory_per_pods": 4,
             "min_pods": 1,
-            "max_pods": 2
+            "max_pods": 2,
+            "disk_setting": null,
+            "node_capacity_type": "ondemand"
         }
     ],
     "user": "user@example.com"
@@ -427,6 +431,18 @@ curl --location 'http://localhost/compute/cluster/{cluster_id}/dashboards'
 # Stop the cluster when done
 curl --location --request POST 'http://localhost/compute/cluster/stop-cluster/{cluster_id}' \
   --header 'msd-user: {"email": "user@example.com"}'
+```
+
+**Understanding Runtime Parameter:**
+
+The `runtime` field specifies which pre-built Docker image to use for your Ray cluster. Darwin supports multiple runtimes with different Python versions and pre-installed libraries:
+
+- `"0.0"`: Default runtime with Ray 2.37.0, Python 3.10, Spark 3.5.1, and darwin-sdk
+- Custom runtimes can be registered with specific library combinations
+
+To check available runtimes:
+```bash
+curl http://localhost/compute/get-runtimes | python3 -m json.tool
 ```
 
 **Or use the Python SDK:**
@@ -504,6 +520,219 @@ features = fs.fetch_features(
     primary_key_names=["user_id"],
     primary_key_values=[[123], [456], [789]]
 )
+```
+
+---
+
+## 🎯 Quick Start: Submit a Spark Job Using Darwin SDK
+
+Darwin SDK provides seamless integration with Apache Spark on Ray clusters. Here's how to run distributed Spark workloads using Darwin as your Spark session provider:
+
+### Step 1: Create a Ray Cluster
+
+```bash
+curl --location 'http://localhost/compute/cluster' \
+  --header 'Content-Type: application/json' \
+  --data-raw '{
+    "cluster_name": "spark-demo-cluster",
+    "tags": ["spark", "demo"],
+    "runtime": "0.0",
+    "inactive_time": 60,
+    "start_cluster": true,
+    "head_node_config": {
+        "cores": 4,
+        "memory": 8,
+        "node_capacity_type": "ondemand"
+    },
+    "worker_node_configs": [{
+        "cores_per_pods": 2,
+        "memory_per_pods": 4,
+        "min_pods": 1,
+        "max_pods": 2,
+        "disk_setting": null,
+        "node_capacity_type": "ondemand"
+    }],
+    "user": "user@example.com"
+}'
+```
+
+Save the `cluster_id` from the response.
+
+### Step 2: Wait for Cluster to be Ready
+
+```bash
+# Check cluster status
+curl http://localhost/compute/cluster/{cluster_id}/metadata
+
+# Wait until status shows "active"
+# Then verify pods are running
+kubectl get pods -n ray -l ray.io/cluster={cluster_id}-kuberay
+```
+
+### Step 3: Create Your Spark Job
+
+Create a file `my_spark_job.py`:
+
+```python
+#!/usr/bin/env python3
+"""
+Darwin SDK Spark Job Example
+"""
+import os
+import ray
+
+# Initialize Ray (connects to running Ray cluster)
+ray.init()
+
+# Set environment variables
+os.environ["ENV"] = "LOCAL"
+os.environ["CLUSTER_ID"] = os.getenv("CLUSTER_ID", "your-cluster-id")
+os.environ["DARWIN_COMPUTE_URL"] = "http://darwin-compute.darwin.svc.cluster.local:8000"
+
+print("=" * 60)
+print("Darwin SDK Spark Job")
+print(f"Cluster ID: {os.environ['CLUSTER_ID']}")
+print("=" * 60)
+
+# Initialize Spark using darwin-sdk
+from darwin import init_spark_with_configs
+
+spark_configs = {
+    "spark.sql.execution.arrow.pyspark.enabled": "true",
+    "spark.sql.session.timeZone": "UTC",
+    "spark.sql.shuffle.partitions": "10",
+    "spark.default.parallelism": "10",
+    "spark.driver.memory": "1g",
+    "spark.executor.memory": "1g",
+}
+
+spark = init_spark_with_configs(spark_configs=spark_configs)
+print(f"✓ Spark initialized (version: {spark.version})")
+
+# Create and process DataFrame
+df = spark.createDataFrame([
+    (1, "Alice", 100),
+    (2, "Bob", 200),
+    (3, "Charlie", 300),
+], ["id", "name", "score"])
+
+print("\nDataFrame Contents:")
+df.show()
+
+print(f"\nTotal records: {df.count()}")
+print(f"Average score: {df.agg({'score': 'avg'}).collect()[0][0]}")
+
+# Stop Spark cleanly
+from darwin import stop_spark
+stop_spark()
+
+print("\n✓ Job completed successfully!")
+```
+
+### Step 4: Submit the Job
+
+**Option A: Using submit_spark_job.sh Script**
+
+```bash
+cd darwin-sdk/darwin
+./submit_spark_job.sh \
+  --cluster-name {cluster_id} \
+  --namespace ray \
+  --job-file /path/to/my_spark_job.py \
+  --wait
+```
+
+**Option B: Using Ray Jobs API**
+
+```bash
+# Port-forward to Ray dashboard
+kubectl port-forward -n ray svc/{cluster_id}-kuberay-head-svc 8265:8265 &
+
+# Submit job
+curl -X POST "http://localhost:8265/api/jobs/" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entrypoint": "python my_spark_job.py",
+    "runtime_env": {
+      "working_dir": "./",
+      "env_vars": {
+        "CLUSTER_ID": "'{cluster_id}'",
+        "ENV": "LOCAL"
+      }
+    },
+    "metadata": {
+      "name": "darwin-spark-demo"
+    }
+  }'
+```
+
+**Option C: Using Ray Python Client**
+
+```python
+from ray.job_submission import JobSubmissionClient
+
+client = JobSubmissionClient("http://localhost:8265")
+
+job_id = client.submit_job(
+    entrypoint="python my_spark_job.py",
+    runtime_env={
+        "working_dir": "./",
+        "env_vars": {
+            "CLUSTER_ID": "{cluster_id}",
+            "ENV": "LOCAL"
+        }
+    }
+)
+
+print(f"Submitted job: {job_id}")
+
+# Wait for completion
+client.wait_until_status(job_id, "SUCCEEDED")
+print(client.get_job_logs(job_id))
+```
+
+### Step 5: Monitor Job Execution
+
+```bash
+# Check job status
+SUBMISSION_ID="raysubmit_xxxxxxxx"
+curl "http://localhost:8265/api/jobs/${SUBMISSION_ID}"
+
+# View job logs
+curl "http://localhost:8265/api/jobs/${SUBMISSION_ID}/logs"
+
+# Or use Ray Dashboard
+open http://localhost:8265
+```
+
+### Darwin SDK Spark Functions
+
+| Function | Description |
+|----------|-------------|
+| `init_spark_with_configs(spark_configs)` | Initialize Spark with custom configurations |
+| `start_spark(spark_conf)` | Start Spark with default Glue catalog configs |
+| `get_raydp_spark_session()` | Get existing Spark session |
+| `stop_spark()` | Stop Spark session cleanly |
+
+### Troubleshooting
+
+**Issue: "Runtime given is incorrect"**
+```bash
+# Check available runtimes
+curl http://localhost/compute/get-runtimes
+```
+
+**Issue: Ray job stuck in PENDING**
+```bash
+# Check Ray head pod
+kubectl describe pod {cluster_id}-kuberay-head-xxx -n ray
+```
+
+**Issue: Connection refused when submitting job**
+```bash
+# Restart port-forward
+pkill -f "port-forward.*8265"
+kubectl port-forward -n ray svc/{cluster_id}-kuberay-head-svc 8265:8265 &
 ```
 
 ---

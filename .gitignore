@@ -32,6 +32,7 @@ Thumbs.db
 # Java/Maven
 # ===========================
 target/
+*.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
 *.class
@@ -344,3 +345,8 @@ kindkubeconfig.yaml
 *-local.yml
 *.local.yaml
 *.local.yml
+
+# ===========================
+# Feature Store
+# ===========================
+feature-store/*/src/main/resources/webroot/*
