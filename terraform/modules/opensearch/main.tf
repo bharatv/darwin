@@ -175,3 +175,4 @@ resource "aws_opensearch_domain" "main" {
 data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
+

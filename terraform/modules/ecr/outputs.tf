@@ -18,3 +18,4 @@ output "registry_url" {
   value       = split("/", values(aws_ecr_repository.repos)[0].repository_url)[0]
 }
 
+

@@ -60,3 +60,4 @@ variable "compute_node_instance_types" {
   default     = ["m5.xlarge"]
 }
 
+

@@ -176,3 +176,4 @@ resource "aws_db_instance" "main" {
 # should be created using SQL scripts or application migrations
 # after the RDS instance is available
 
+

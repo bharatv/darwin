@@ -184,3 +184,4 @@ variable "opensearch_engine_version" {
   default = "OpenSearch_2.11"
 }
 
+
