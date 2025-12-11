@@ -27,7 +27,7 @@ router = APIRouter(prefix="/cluster/{cluster_id}/library")
 @router.get("")
 async def get_libraries(
     cluster_id: str,
-    key: str = None,
+    key: Optional[str] = "",
     sort_by: Optional[str] = "id",
     sort_order: Optional[str] = "desc",
     offset: int = 0,
