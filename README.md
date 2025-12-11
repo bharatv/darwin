@@ -364,6 +364,22 @@ hermes create-environment \
 ./start.sh
 ```
 
+#### Choosing Your Components
+
+During `init.sh`, you'll select which Darwin components to enable. Here's how to decide based on your workflow:
+
+| If you want to... | Enable |
+|-------------------|--------|
+| Run distributed data processing jobs or spin up short-lived compute clusters | **Compute** |
+| Work interactively with persistent code and notebooks attached to scalable clusters | **Workspace** (includes Compute) |
+| Store, version, and serve features for ML training and inference | **Feature Store** |
+| Track experiments, log metrics, and manage model versions | **MLflow** |
+| Deploy trained models as real-time inference endpoints | **Serve** (includes Artifact Builder) |
+| Discover and track lineage across datasets, models, and pipelines | **Catalog** |
+| Capture platform events and build metadata graphs | **Chronos** |
+
+> **Tip**: Dependencies are resolved automatically. For example, enabling **Workspace** will also enable **Compute**, and enabling **Serve** will include **Artifact Builder** and **MLflow**.
+
 **Access Services**:
 - Feature Store: `http://localhost/feature-store/*`
 - MLflow UI: `http://localhost/mlflow/*`
