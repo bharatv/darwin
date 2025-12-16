@@ -1,0 +1,273 @@
+name: MLflow CI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'mlflow/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'mlflow/**'
+  workflow_dispatch:
+
+jobs:
+  lint-and-typecheck:
+    name: Lint and Type Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('mlflow/app_layer/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        working-directory: mlflow/app_layer
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements_dev.txt
+      
+      - name: Run pylint on app_layer
+        working-directory: mlflow/app_layer
+        run: |
+          echo "Running pylint on entire app_layer directory..."
+          pylint app_layer/ --max-line-length=120 --disable=too-many-arguments,not-callable || true
+      
+      - name: Run mypy on app_layer
+        working-directory: mlflow/app_layer
+        run: |
+          echo "Running mypy on entire app_layer directory..."
+          mypy app_layer/ --config-file=pyproject.toml || true
+
+  service-health-check:
+    name: Service Health Check
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: darwin_mlflow
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      
+      localstack:
+        image: localstack/localstack:latest
+        env:
+          SERVICES: s3
+          DEBUG: 1
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd="curl -f http://localhost:4566/_localstack/health || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install mysql-client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+      
+      - name: Wait for MySQL to be ready
+        run: |
+          echo "Waiting for MySQL to be ready..."
+          for i in {1..30}; do
+            if mysql -h 127.0.0.1 -u root -ptest_password -e "SELECT 1" > /dev/null 2>&1; then
+              echo "MySQL is ready!"
+              break
+            fi
+            echo "Attempt $i/30 - MySQL not ready yet, waiting..."
+            sleep 2
+          done
+      
+      - name: Create MySQL user and grant privileges
+        run: |
+          echo "Creating MySQL user 'darwin' and granting privileges..."
+          mysql -h 127.0.0.1 -u root -ptest_password <<EOF
+          CREATE USER IF NOT EXISTS 'darwin'@'%' IDENTIFIED BY 'password';
+          GRANT ALL PRIVILEGES ON *.* TO 'darwin'@'%';
+          FLUSH PRIVILEGES;
+          EOF
+      
+      - name: Wait for LocalStack to be ready
+        run: |
+          echo "Waiting for LocalStack to be ready..."
+          for i in {1..30}; do
+            if curl -f http://localhost:4566/_localstack/health > /dev/null 2>&1; then
+              echo "LocalStack is ready!"
+              break
+            fi
+            echo "Attempt $i/30 - LocalStack not ready yet, waiting..."
+            sleep 2
+          done
+      
+      - name: Set environment variables for darwin-mlflow
+        run: |
+          echo "BASE_DIR=${{ github.workspace }}/mlflow" >> $GITHUB_ENV
+          echo "APP_DIR=${{ github.workspace }}/mlflow" >> $GITHUB_ENV
+          echo "SERVICE_NAME=darwin-mlflow" >> $GITHUB_ENV
+          echo "DEPLOYMENT_TYPE=local" >> $GITHUB_ENV
+          echo "ENV=darwin-local" >> $GITHUB_ENV
+          echo "PLATFORM=github-actions" >> $GITHUB_ENV
+          echo "NAMESPACE=ci-test" >> $GITHUB_ENV
+          echo "DARWIN_MYSQL_HOST=127.0.0.1" >> $GITHUB_ENV
+          echo "DARWIN_MYSQL_USERNAME=root" >> $GITHUB_ENV
+          echo "DARWIN_MYSQL_PASSWORD=test_password" >> $GITHUB_ENV
+          echo "VAULT_SERVICE_MYSQL_USERNAME=darwin" >> $GITHUB_ENV
+          echo "VAULT_SERVICE_MYSQL_PASSWORD=password" >> $GITHUB_ENV
+          echo "CONFIG_SERVICE_MYSQL_DATABASE=darwin_mlflow" >> $GITHUB_ENV
+          echo "CONFIG_SERVICE_MYSQL_AUTH_DATABASE=darwin_mlflow_auth" >> $GITHUB_ENV
+          echo "CONFIG_SERVICE_MYSQL_MASTERHOST=127.0.0.1" >> $GITHUB_ENV
+          echo "MYSQL_PORT=3306" >> $GITHUB_ENV
+          echo "AWS_ENDPOINT_OVERRIDE=http://localhost:4566" >> $GITHUB_ENV
+          echo "AWS_ACCESS_KEY_ID=test" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=test" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=us-east-1" >> $GITHUB_ENV
+          echo "MLFLOW_S3_BUCKET=darwin-mlflow" >> $GITHUB_ENV
+          echo "MLFLOW_S3_ENDPOINT_URL=http://localhost:4566" >> $GITHUB_ENV
+          echo "MLFLOW_UI_URL=http://localhost:8080" >> $GITHUB_ENV
+          echo "MLFLOW_APP_LAYER_URL=http://localhost:8000" >> $GITHUB_ENV
+          echo "MLFLOW_APP_BASE_PATH=" >> $GITHUB_ENV
+          echo "VAULT_SERVICE_MLFLOW_ADMIN_USERNAME=darwin" >> $GITHUB_ENV
+          echo "VAULT_SERVICE_MLFLOW_ADMIN_PASSWORD=password" >> $GITHUB_ENV
+          echo "VAULT_SERVICE_ADMIN_USERNAME=darwin" >> $GITHUB_ENV
+          echo "VAULT_SERVICE_ADMIN_PASSWORD=password" >> $GITHUB_ENV
+          echo "MLFLOW_AUTH_ENABLED=false" >> $GITHUB_ENV
+      
+      - name: Setup darwin-mlflow dependencies
+        working-directory: mlflow
+        run: |
+          echo "Running darwin-mlflow setup.sh..."
+          chmod +x .odin/darwin-mlflow/setup.sh
+          bash .odin/darwin-mlflow/setup.sh
+      
+      - name: Initialize darwin-mlflow databases
+        working-directory: mlflow
+        run: |
+          echo "Running darwin-mlflow pre-deploy.sh..."
+          chmod +x .odin/darwin-mlflow/pre-deploy.sh
+          bash .odin/darwin-mlflow/pre-deploy.sh
+      
+      - name: Start darwin-mlflow server
+        working-directory: mlflow
+        run: |
+          echo "Starting darwin-mlflow server on port 8080..."
+          chmod +x .odin/darwin-mlflow/start.sh
+          bash .odin/darwin-mlflow/start.sh > /tmp/darwin-mlflow.log 2>&1 &
+          echo $! > /tmp/darwin-mlflow.pid
+          echo "darwin-mlflow PID: $(cat /tmp/darwin-mlflow.pid)"
+      
+      - name: Wait for darwin-mlflow to be ready
+        run: |
+          echo "Waiting for darwin-mlflow to be ready on port 8080..."
+          for i in {1..60}; do
+            if curl -f http://localhost:8080/health > /dev/null 2>&1 || curl -f http://localhost:8080/api/2.0/mlflow/experiments/list > /dev/null 2>&1; then
+              echo "darwin-mlflow is ready!"
+              break
+            fi
+            echo "Attempt $i/60 - darwin-mlflow not ready yet, waiting..."
+            sleep 3
+          done
+          
+          # Check if service is actually running
+          if ! curl -f http://localhost:8080/health > /dev/null 2>&1 && ! curl -f http://localhost:8080/api/2.0/mlflow/experiments/list > /dev/null 2>&1; then
+            echo "WARNING: darwin-mlflow may not be fully ready, but continuing..."
+            echo "Checking logs:"
+            tail -n 50 /tmp/darwin-mlflow.log || true
+          fi
+      
+      - name: Setup darwin-mlflow-app dependencies
+        working-directory: mlflow
+        run: |
+          echo "Running darwin-mlflow-app setup.sh..."
+          chmod +x .odin/darwin-mlflow-app/setup.sh
+          export SERVICE_NAME=darwin-mlflow-app
+          bash .odin/darwin-mlflow-app/setup.sh
+      
+      - name: Start darwin-mlflow-app server
+        working-directory: mlflow
+        run: |
+          echo "Starting darwin-mlflow-app server on port 8000..."
+          chmod +x .odin/darwin-mlflow-app/start.sh
+          export SERVICE_NAME=darwin-mlflow-app
+          bash .odin/darwin-mlflow-app/start.sh > /tmp/darwin-mlflow-app.log 2>&1 &
+          echo $! > /tmp/darwin-mlflow-app.pid
+          echo "darwin-mlflow-app PID: $(cat /tmp/darwin-mlflow-app.pid)"
+      
+      - name: Wait for darwin-mlflow-app to be ready
+        run: |
+          echo "Waiting for darwin-mlflow-app to be ready on port 8000..."
+          for i in {1..60}; do
+            if curl -f http://localhost:8000/health > /dev/null 2>&1; then
+              echo "darwin-mlflow-app is ready!"
+              break
+            fi
+            echo "Attempt $i/60 - darwin-mlflow-app not ready yet, waiting..."
+            sleep 3
+          done
+      
+      - name: Test health endpoint
+        run: |
+          echo "Testing darwin-mlflow-app /health endpoint..."
+          response=$(curl -s http://localhost:8000/health)
+          echo "Response: $response"
+          
+          if echo "$response" | grep -q '"status":"SUCCESS"' || echo "$response" | grep -q '"status": "SUCCESS"'; then
+            echo "✅ Health check passed!"
+          else
+            echo "❌ Health check failed! Expected status: SUCCESS"
+            exit 1
+          fi
+      
+      - name: Display service logs on failure
+        if: failure()
+        run: |
+          echo "=== darwin-mlflow logs ==="
+          cat /tmp/darwin-mlflow.log || echo "No darwin-mlflow logs found"
+          echo ""
+          echo "=== darwin-mlflow-app logs ==="
+          cat /tmp/darwin-mlflow-app.log || echo "No darwin-mlflow-app logs found"
+      
+      - name: Cleanup services
+        if: always()
+        run: |
+          echo "Stopping services..."
+          if [ -f /tmp/darwin-mlflow-app.pid ]; then
+            kill $(cat /tmp/darwin-mlflow-app.pid) 2>/dev/null || true
+          fi
+          if [ -f /tmp/darwin-mlflow.pid ]; then
+            kill $(cat /tmp/darwin-mlflow.pid) 2>/dev/null || true
+          fi
+          echo "Services stopped"
+
