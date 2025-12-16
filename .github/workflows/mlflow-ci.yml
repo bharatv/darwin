@@ -16,7 +16,7 @@ on:
 jobs:
   lint-and-typecheck:
     name: Lint and Type Check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, X64, onboarding]
     
     steps:
       - name: Checkout code
@@ -56,7 +56,7 @@ jobs:
 
   service-health-check:
     name: Service Health Check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, X64, onboarding]
     
     services:
       mysql:
