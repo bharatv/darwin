@@ -1,47 +1,48 @@
 name: MLflow CI
 
+
 on:
   push:
-    branches:
-      - main
-      - "feat/mlflow-ci"
+    paths:
+      - 'mlflow/**'
+      - '.github/workflows/mlflow-ci.yml'
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - "mlflow/**"
-      - ".github/workflows/mlflow-ci.yml"
+      - 'mlflow/**'
+      - '.github/workflows/mlflow-ci.yml'
   workflow_dispatch:
 jobs:
   lint-and-typecheck:
     name: Lint and Type Check
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+      
       - name: Set up Python 3.9.7
         uses: actions/setup-python@v5
         with:
           # Using Python 3.9 (latest patch version) instead of 3.9.7 because 3.9.7 is not available for Ubuntu 24.04
           # The project requires Python 3.9.7+ (see mlflow/README.md), so any 3.9.x version satisfies this requirement
-          python-version: "3.9"
-          cache: "pip"
-          cache-dependency-path: "mlflow/app_layer/requirements*.txt"
-
+          python-version: '3.9'
+          cache: 'pip'
+          cache-dependency-path: 'mlflow/app_layer/requirements*.txt'
+      
       - name: Install dependencies
         working-directory: mlflow/app_layer
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements_dev.txt
-
+      
       - name: Run pylint on app_layer
         working-directory: mlflow/app_layer
         run: |
           echo "Running pylint on entire app_layer directory..."
           pylint src/ --rcfile=pyproject.toml
-
+      
       - name: Run mypy on app_layer
         working-directory: mlflow/app_layer
         run: |
@@ -51,7 +52,7 @@ jobs:
   service-health-check:
     name: Service Health Check
     runs-on: ubuntu-latest
-
+    
     services:
       mysql:
         image: mysql:8.0
@@ -65,7 +66,7 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-
+      
       localstack:
         image: localstack/localstack:latest
         env:
@@ -78,28 +79,28 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
+      
       - name: Set up Python 3.9.7
         uses: actions/setup-python@v5
         with:
           # Using Python 3.9 (latest patch version) instead of 3.9.7 because 3.9.7 is not available for Ubuntu 24.04
           # The project requires Python 3.9.7+ (see mlflow/README.md), so any 3.9.x version satisfies this requirement
-          python-version: "3.9"
-          cache: "pip"
+          python-version: '3.9'
+          cache: 'pip'
           cache-dependency-path: |
             mlflow/app_layer/requirements*.txt
             mlflow/.odin/darwin-mlflow/setup.sh
             mlflow/.odin/darwin-mlflow-app/setup.sh
-
+      
       - name: Install mysql-client
         run: |
           sudo apt-get update
           sudo apt-get install -y mysql-client
-
+      
       - name: Wait for MySQL to be ready
         run: |
           echo "Waiting for MySQL to be ready..."
@@ -111,7 +112,7 @@ jobs:
             echo "Attempt $i/30 - MySQL not ready yet, waiting..."
             sleep 2
           done
-
+      
       - name: Create MySQL user and grant privileges
         run: |
           echo "Creating MySQL user 'darwin' and granting privileges..."
@@ -120,7 +121,7 @@ jobs:
           GRANT ALL PRIVILEGES ON *.* TO 'darwin'@'%';
           FLUSH PRIVILEGES;
           EOF
-
+      
       - name: Wait for LocalStack to be ready
         run: |
           echo "Waiting for LocalStack to be ready..."
@@ -132,7 +133,7 @@ jobs:
             echo "Attempt $i/30 - LocalStack not ready yet, waiting..."
             sleep 2
           done
-
+      
       - name: Set environment variables for darwin-mlflow
         run: |
           echo "BASE_DIR=${{ github.workspace }}/mlflow" >> $GITHUB_ENV
@@ -165,21 +166,21 @@ jobs:
           echo "VAULT_SERVICE_ADMIN_USERNAME=darwin" >> $GITHUB_ENV
           echo "VAULT_SERVICE_ADMIN_PASSWORD=password" >> $GITHUB_ENV
           echo "MLFLOW_AUTH_ENABLED=false" >> $GITHUB_ENV
-
+      
       - name: Setup darwin-mlflow dependencies
         working-directory: mlflow
         run: |
           echo "Running darwin-mlflow setup.sh..."
           chmod +x .odin/darwin-mlflow/setup.sh
           bash .odin/darwin-mlflow/setup.sh
-
+      
       - name: Initialize darwin-mlflow databases
         working-directory: mlflow
         run: |
           echo "Running darwin-mlflow pre-deploy.sh..."
           chmod +x .odin/darwin-mlflow/pre-deploy.sh
           bash .odin/darwin-mlflow/pre-deploy.sh
-
+      
       - name: Start darwin-mlflow server
         working-directory: mlflow
         run: |
@@ -200,7 +201,7 @@ jobs:
           set +e  # Disable exit on error for curl commands
           echo "Waiting for darwin-mlflow to be ready on port 8080..."
           echo "Note: MLflow server doesn't have /health endpoint"
-
+          
           # Read PID and verify it exists
           if [ ! -f /tmp/darwin-mlflow.pid ]; then
             echo "ERROR: PID file not found!"
@@ -215,7 +216,7 @@ jobs:
             tail -n 100 /tmp/darwin-mlflow.log || true
             exit 1
           fi
-
+      
       - name: Setup darwin-mlflow-app dependencies
         working-directory: mlflow
         run: |
@@ -223,7 +224,7 @@ jobs:
           chmod +x .odin/darwin-mlflow-app/setup.sh
           export SERVICE_NAME=darwin-mlflow-app
           bash .odin/darwin-mlflow-app/setup.sh
-
+      
       - name: Start and Test darwin-mlflow-app server
         working-directory: mlflow
         run: |
@@ -233,10 +234,10 @@ jobs:
           bash .odin/darwin-mlflow-app/start.sh > /tmp/darwin-mlflow-app.log 2>&1 &
           echo $! > /tmp/darwin-mlflow-app.pid
           echo "darwin-mlflow-app PID: $(cat /tmp/darwin-mlflow-app.pid)"
-
+          
           # Give the process a moment to start
           sleep 2
-
+          
           # Check if process is still running
           if ! ps -p $(cat /tmp/darwin-mlflow-app.pid) > /dev/null 2>&1; then
             echo "ERROR: darwin-mlflow-app process died immediately!"
@@ -262,7 +263,7 @@ jobs:
             tail -n 100 /tmp/curl-log.log || true
             sleep 3
           done
-
+          
           # Final check
           if ! curl -f http://127.0.0.1:8000/health > /tmp/curl-log.log 2>&1; then
             echo "ERROR: darwin-mlflow-app failed to become ready!"
@@ -270,18 +271,18 @@ jobs:
             tail -n 100 /tmp/darwin-mlflow-app.log || true
             exit 1
           fi
-
+          
           echo "Testing darwin-mlflow-app /health endpoint..."
           response=$(curl -s http://127.0.0.1:8000/health)
           echo "Response: $response"
-
+          
           if echo "$response" | grep -q '"status":"SUCCESS"' || echo "$response" | grep -q '"status": "SUCCESS"'; then
             echo "✅ Health check passed!"
           else
             echo "❌ Health check failed! Expected status: SUCCESS"
             exit 1
           fi
-
+      
       - name: Display service logs on failure
         if: failure()
         run: |
@@ -290,7 +291,7 @@ jobs:
           echo ""
           echo "=== darwin-mlflow-app logs ==="
           cat /tmp/darwin-mlflow-app.log || echo "No darwin-mlflow-app logs found"
-
+      
       - name: Cleanup services
         if: always()
         run: |
@@ -302,3 +303,4 @@ jobs:
             kill $(cat /tmp/darwin-mlflow.pid) 2>/dev/null || true
           fi
           echo "Services stopped"
+
