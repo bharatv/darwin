@@ -13,9 +13,6 @@ on:
     paths:
       - 'mlflow/**'
       - '.github/workflows/mlflow-ci.yml'
-    branches-ignore:
-      - main
-      - develop
   workflow_dispatch:
 jobs:
   lint-and-typecheck:
