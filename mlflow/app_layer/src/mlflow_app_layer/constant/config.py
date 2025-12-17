@@ -26,13 +26,13 @@ class Config:
     def mlflow_app_base_path(self):
         return self._config["MLFLOW_APP_BASE_PATH"]
 
-    def mlflow_admin_credentials(self) -> dict:
+    def mlflow_admin_credentials(self) -> dict[str, str]:
         return {
             "username": self._config["MLFLOW_ADMIN_USERNAME"],
             "password": self._config["MLFLOW_ADMIN_PASSWORD"],
         }
 
-    def db_config(self) -> dict:
+    def db_config(self) -> dict[str, str]:
         mysql_db = self._config["mysql_db"]  # type: ignore[index]
         return {
             "host": mysql_db["host"],  # type: ignore[index]
