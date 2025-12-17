@@ -1,3 +1,5 @@
+from typing import Any
+
 from typeguard import typechecked
 from mlflow_app_layer.config.constants import CONFIG_MAP
 
@@ -24,18 +26,18 @@ class Config:
     def mlflow_app_base_path(self):
         return self._config["MLFLOW_APP_BASE_PATH"]
 
-    def mlflow_admin_credentials(self) -> dict:
+    def mlflow_admin_credentials(self) -> dict[str, Any]:
         return {
             "username": self._config["MLFLOW_ADMIN_USERNAME"],
             "password": self._config["MLFLOW_ADMIN_PASSWORD"],
         }
 
-    def db_config(self) -> dict:
-        mysql_db = self._config["mysql_db"]
+    def db_config(self) -> dict[str, Any]:
+        mysql_db = self._config["mysql_db"]  # type: ignore[index]
         return {
-            "host": mysql_db["host"],
-            "user": mysql_db["username"],
-            "password": mysql_db["password"],
-            "database": mysql_db["database"],
-            "port": mysql_db["port"],
+            "host": mysql_db["host"],  # type: ignore[index]
+            "user": mysql_db["username"],  # type: ignore[index]
+            "password": mysql_db["password"],  # type: ignore[index]
+            "database": mysql_db["database"],  # type: ignore[index]
+            "port": mysql_db["port"],  # type: ignore[index]
         }

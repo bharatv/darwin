@@ -17,10 +17,9 @@
 # Databricks, Inc. Modifications include custom authentication, authorization,
 # and integration with the Darwin platform.
 
-import os
 from typing import Union
 
-from fastapi import FastAPI, Request, Header
+from fastapi import FastAPI, Request, Header, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from ddtrace import patch
 
@@ -124,6 +123,8 @@ async def get_artifacts_path(request: Request, path: str):
 async def get_experiment(
     experiment_id: str, email: Union[str, None] = Header(default=None)
 ):
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email header is required")
     return await get_experiment_controller(experiment_id, config, email, mlflow_service)
 
 
@@ -136,6 +137,8 @@ async def create_user(request: Request):
 async def create_experiment(
     request: CreateExperimentRequest, email: Union[str, None] = Header(default=None)
 ):
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email header is required")
     return await create_experiment_controller(request, config, email)
 
 
@@ -145,6 +148,8 @@ async def update_experiment(
     request: UpdateExperimentRequest,
     email: Union[str, None] = Header(default=None),
 ):
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email header is required")
     return await update_experiment_controller(experiment_id, request, config, email)
 
 
@@ -152,6 +157,8 @@ async def update_experiment(
 async def delete_experiment(
     experiment_id: str, email: Union[str, None] = Header(default=None)
 ):
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email header is required")
     return await delete_experiment_controller(
         experiment_id, config, email, mlflow_service
     )
@@ -161,6 +168,8 @@ async def delete_experiment(
 async def search_models(
     request: Request, email: Union[str, None] = Header(default=None)
 ):
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email header is required")
     return await search_models_controller(request, config, email)
 
 
@@ -168,6 +177,8 @@ async def search_models(
 async def get_run(
     experiment_id: str, run_id: str, email: Union[str, None] = Header(default=None)
 ):
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email header is required")
     return await get_run_controller(
         experiment_id, run_id, config, email, mlflow_service
     )
@@ -177,6 +188,8 @@ async def get_run(
 async def delete_run(
     experiment_id: str, run_id: str, email: Union[str, None] = Header(default=None)
 ):
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email header is required")
     return await delete_run_controller(
         experiment_id, run_id, config, email, mlflow_service
     )
@@ -188,6 +201,8 @@ async def create_run(
     request: CreateRunRequest,
     email: Union[str, None] = Header(default=None),
 ):
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email header is required")
     return await create_run_controller(
         experiment_id, request, config, email, mlflow_service
     )
@@ -199,4 +214,6 @@ async def log_data(
     request: LogRunDataRequest,
     email: Union[str, None] = Header(default=None),
 ):
+    if email is None:
+        raise HTTPException(status_code=401, detail="Email header is required")
     return await log_run_data_controller(run_id, request, email, config)
