@@ -6,8 +6,6 @@ on:
     paths:
       - 'mlflow/**'
       - '.github/workflows/mlflow-ci.yml'
-    branches:
-      - main
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
