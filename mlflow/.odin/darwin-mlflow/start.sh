@@ -40,14 +40,16 @@ export VAULT_SERVICE_ADMIN_PASSWORD=password
 export VAULT_SERVICE_MLFLOW_ADMIN_PASSWORD=password
 export VAULT_SERVICE_MLFLOW_ADMIN_USERNAME=darwin
 
-if [[ "$DEPLOYMENT_TYPE" == "container" ]]; then
-  mkdir -p /app/log/"$SERVICE_NAME"
-  chmod 777 /app/log/"$SERVICE_NAME"/
-  export LOG_DIR=/app/log/"$SERVICE_NAME"
-else
-  mkdir -p /var/log/"$SERVICE_NAME"
-  chmod 777 /var/log/"$SERVICE_NAME"/
-  export LOG_DIR=/var/log/"$SERVICE_NAME"
+if [[ -z "${LOG_DIR:-}" ]]; then
+  if [[ "$DEPLOYMENT_TYPE" == "container" ]]; then
+    mkdir -p /app/log/"$SERVICE_NAME"
+    chmod 777 /app/log/"$SERVICE_NAME"/
+    export LOG_DIR=/app/log/"$SERVICE_NAME"
+  else
+    mkdir -p /var/log/"$SERVICE_NAME"
+    chmod 777 /var/log/"$SERVICE_NAME"/
+    export LOG_DIR=/var/log/"$SERVICE_NAME"
+  fi
 fi
 
 if [[ "$ENV" != "darwin-local" ]] ; then
@@ -81,20 +83,13 @@ fi
 
 echo "Starting MLFlow Server"
 
-# Use python3 -m to ensure we use the correct Python environment
-if [[ "$DEPLOYMENT_TYPE" == "container" ]]; then
-  MLFLOW_CMD="bin/python3 -m mlflow"
-else
-  MLFLOW_CMD="python3 -m mlflow"
-fi
-
-$MLFLOW_CMD --version
+mlflow --version
 
 if [[ "$MLFLOW_AUTH_ENABLED" == "true" ]]; then
   echo "auth true"
   echo "Using S3 endpoint: ${MLFLOW_S3_ENDPOINT_URL}"
   echo "Using S3 bucket: ${MLFLOW_S3_BUCKET}"
-  MLFLOW_TRACKING_USERNAME=${VAULT_SERVICE_MLFLOW_ADMIN_USERNAME} MLFLOW_TRACKING_PASSWORD=${VAULT_SERVICE_MLFLOW_ADMIN_PASSWORD} LOG_FILE=$LOG_DIR/darwin-mlflow.log MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL} MLFLOW_AUTH_CONFIG_PATH=auth_config.ini $MLFLOW_CMD server \
+  MLFLOW_TRACKING_USERNAME=${VAULT_SERVICE_MLFLOW_ADMIN_USERNAME} MLFLOW_TRACKING_PASSWORD=${VAULT_SERVICE_MLFLOW_ADMIN_PASSWORD} LOG_FILE=$LOG_DIR/darwin-mlflow.log MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL} MLFLOW_AUTH_CONFIG_PATH=auth_config.ini mlflow server \
     --backend-store-uri "mysql+pymysql://${VAULT_SERVICE_MYSQL_USERNAME}:${VAULT_SERVICE_MYSQL_PASSWORD}@${CONFIG_SERVICE_MYSQL_MASTERHOST}/${CONFIG_SERVICE_MYSQL_DATABASE}" \
     --artifacts-destination "s3://${MLFLOW_S3_BUCKET}" \
     --host 0.0.0.0 \
@@ -104,7 +99,7 @@ else
   echo "auth false"
   echo "Using S3 endpoint: ${MLFLOW_S3_ENDPOINT_URL}"
   echo "Using S3 bucket: ${MLFLOW_S3_BUCKET}"
-  MLFLOW_TRACKING_USERNAME=${VAULT_SERVICE_MLFLOW_ADMIN_USERNAME} MLFLOW_TRACKING_PASSWORD=${VAULT_SERVICE_MLFLOW_ADMIN_PASSWORD} LOG_FILE=$LOG_DIR/darwin-mlflow.log MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL} $MLFLOW_CMD server \
+  MLFLOW_TRACKING_USERNAME=${VAULT_SERVICE_MLFLOW_ADMIN_USERNAME} MLFLOW_TRACKING_PASSWORD=${VAULT_SERVICE_MLFLOW_ADMIN_PASSWORD} LOG_FILE=$LOG_DIR/darwin-mlflow.log MLFLOW_S3_ENDPOINT_URL=${MLFLOW_S3_ENDPOINT_URL} mlflow server \
     --backend-store-uri "mysql+pymysql://${VAULT_SERVICE_MYSQL_USERNAME}:${VAULT_SERVICE_MYSQL_PASSWORD}@${CONFIG_SERVICE_MYSQL_MASTERHOST}/${CONFIG_SERVICE_MYSQL_DATABASE}" \
     --artifacts-destination "s3://${MLFLOW_S3_BUCKET}" \
     --host 0.0.0.0 \

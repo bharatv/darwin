@@ -25,16 +25,17 @@ fi
 
 
 echo "----- Setup log file path -----"
-if [[ "$DEPLOYMENT_TYPE" == "container" ]]; then
-  mkdir -p /app/log/darwin-mlflow-app
-  chmod 777 /app/log/darwin-mlflow-app/
-  export LOG_DIR=/app/log/darwin-mlflow-app
-else
-  mkdir -p /var/log/darwin-mlflow-app
-  chmod 777 /var/log/darwin-mlflow-app/
-  export LOG_DIR=/var/log/darwin-mlflow-app
+if [[ -z "${LOG_DIR:-}" ]]; then
+  if [[ "$DEPLOYMENT_TYPE" == "container" ]]; then
+    mkdir -p /app/log/darwin-mlflow-app
+    chmod 777 /app/log/darwin-mlflow-app/
+    export LOG_DIR=/app/log/darwin-mlflow-app
+  else
+    mkdir -p /var/log/darwin-mlflow-app
+    chmod 777 /var/log/darwin-mlflow-app/
+    export LOG_DIR=/var/log/darwin-mlflow-app
+  fi
 fi
-
 echo "Cding into app dir.."
 cd "$APP_DIR" || exit
 
@@ -69,12 +70,11 @@ echo "DARWIN_MYSQL_PASSWORD: ${DARWIN_MYSQL_PASSWORD:-password}"
 echo "DARWIN_MYSQL_HOST: ${DARWIN_MYSQL_HOST:-darwin-mysql}"
 echo "DARWIN_MYSQL_USERNAME: ${DARWIN_MYSQL_USERNAME:-darwin}"
 
-# Use python3 -m to ensure we use the correct Python environment
 if [[ "$DEPLOYMENT_TYPE" == "container" ]]; then
   source bin/activate
   echo "Starting app layer ..."
-  LOG_FILE=$LOG_DIR/darwin-mlflow-app.log bin/python3 -m uvicorn app_layer.src.mlflow_app_layer.main:app --host 0.0.0.0 --port 8000 --workers 1
+  LOG_FILE=$LOG_DIR/darwin-mlflow-app.log uvicorn app_layer.src.mlflow_app_layer.main:app --host 0.0.0.0 --port 8000 --workers 1
 else
   echo "Starting app layer ..."
-  LOG_FILE=$LOG_DIR/darwin-mlflow-app.log python3 -m uvicorn app_layer.src.mlflow_app_layer.main:app --host 0.0.0.0 --port 8000 --workers 1
+  LOG_FILE=$LOG_DIR/darwin-mlflow-app.log uvicorn app_layer.src.mlflow_app_layer.main:app --host 0.0.0.0 --port 8000 --workers 1
 fi

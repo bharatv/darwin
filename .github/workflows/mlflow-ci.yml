@@ -138,6 +138,7 @@ jobs:
           echo "BASE_DIR=${{ github.workspace }}/mlflow" >> $GITHUB_ENV
           echo "APP_DIR=${{ github.workspace }}/mlflow" >> $GITHUB_ENV
           echo "SERVICE_NAME=darwin-mlflow" >> $GITHUB_ENV
+          echo "LOG_DIR=${{ runner.temp }}/darwin-mlflow-logs" >> $GITHUB_ENV
           echo "DEPLOYMENT_TYPE=local" >> $GITHUB_ENV
           echo "ENV=darwin-local" >> $GITHUB_ENV
           echo "PLATFORM=github-actions" >> $GITHUB_ENV
@@ -208,7 +209,7 @@ jobs:
           fi
           MLFLOW_PID=$(cat /tmp/darwin-mlflow.pid)
           echo "Checking MLflow process with PID: $MLFLOW_PID"
-          echo "Waiting for darwin-mlflow to be ready on port 8000..."
+          echo "Waiting for darwin-mlflow to be ready on port 8080..."
           if ! ps -p $(cat /tmp/darwin-mlflow.pid) > /dev/null 2>&1; then
             echo "ERROR: darwin-mlflow process died!"
             echo "Logs:"
