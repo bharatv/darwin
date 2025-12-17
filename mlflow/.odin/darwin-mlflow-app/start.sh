@@ -69,11 +69,12 @@ echo "DARWIN_MYSQL_PASSWORD: ${DARWIN_MYSQL_PASSWORD:-password}"
 echo "DARWIN_MYSQL_HOST: ${DARWIN_MYSQL_HOST:-darwin-mysql}"
 echo "DARWIN_MYSQL_USERNAME: ${DARWIN_MYSQL_USERNAME:-darwin}"
 
+# Use python3 -m to ensure we use the correct Python environment
 if [[ "$DEPLOYMENT_TYPE" == "container" ]]; then
   source bin/activate
   echo "Starting app layer ..."
-  LOG_FILE=$LOG_DIR/darwin-mlflow-app.log uvicorn app_layer.src.mlflow_app_layer.main:app --host 0.0.0.0 --port 8000 --workers 1
+  LOG_FILE=$LOG_DIR/darwin-mlflow-app.log bin/python3 -m uvicorn app_layer.src.mlflow_app_layer.main:app --host 0.0.0.0 --port 8000 --workers 1
 else
   echo "Starting app layer ..."
-  LOG_FILE=$LOG_DIR/darwin-mlflow-app.log uvicorn app_layer.src.mlflow_app_layer.main:app --host 0.0.0.0 --port 8000 --workers 1
+  LOG_FILE=$LOG_DIR/darwin-mlflow-app.log python3 -m uvicorn app_layer.src.mlflow_app_layer.main:app --host 0.0.0.0 --port 8000 --workers 1
 fi
