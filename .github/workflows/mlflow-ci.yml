@@ -1,18 +1,22 @@
 name: MLflow CI
 
+
 on:
   push:
-    branches:
-      - main
     paths:
       - 'mlflow/**'
+      - '.github/workflows/mlflow-ci.yml'
+    branches:
+      - main
   pull_request:
-    branches:
-      - main
+    types: [opened, synchronize, reopened]
     paths:
       - 'mlflow/**'
+      - '.github/workflows/mlflow-ci.yml'
+    branches-ignore:
+      - main
+      - develop
   workflow_dispatch:
-
 jobs:
   lint-and-typecheck:
     name: Lint and Type Check
