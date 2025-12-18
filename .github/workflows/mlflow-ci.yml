@@ -10,21 +10,42 @@ on:
       - "mlflow/**"
       - ".github/workflows/mlflow-ci.yml"
   workflow_dispatch:
+    inputs:
+      run_lint:
+        description: "Run lint and type check"
+        required: false
+        type: boolean
+        default: true
+      run_health_check:
+        description: "Run service health check"
+        required: false
+        type: boolean
+        default: true
+      python_version:
+        description: "Python version to use"
+        required: false
+        type: choice
+        options:
+          - "3.9"
+          - "3.10"
+          - "3.11"
+        default: "3.9"
 jobs:
   lint-and-typecheck:
     name: Lint and Type Check
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.run_lint == true || github.event_name != 'workflow_dispatch'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.9.7
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           # Using Python 3.9 (latest patch version) instead of 3.9.7 because 3.9.7 is not available for Ubuntu 24.04
           # The project requires Python 3.9.7+ (see mlflow/README.md), so any 3.9.x version satisfies this requirement
-          python-version: "3.9"
+          python-version: ${{ github.event_name == 'workflow_dispatch' && inputs.python_version || '3.9' }}
           cache: "pip"
           cache-dependency-path: "mlflow/app_layer/requirements*.txt"
 
@@ -50,6 +71,7 @@ jobs:
   service-health-check:
     name: Service Health Check
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.run_health_check == true || github.event_name != 'workflow_dispatch'
 
     services:
       mysql:
@@ -82,12 +104,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.9.7
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           # Using Python 3.9 (latest patch version) instead of 3.9.7 because 3.9.7 is not available for Ubuntu 24.04
           # The project requires Python 3.9.7+ (see mlflow/README.md), so any 3.9.x version satisfies this requirement
-          python-version: "3.9"
+          python-version: ${{ github.event_name == 'workflow_dispatch' && inputs.python_version || '3.9' }}
           cache: "pip"
           cache-dependency-path: |
             mlflow/app_layer/requirements*.txt
