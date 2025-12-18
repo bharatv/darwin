@@ -200,8 +200,6 @@ jobs:
           fi
           set +e  # Disable exit on error for curl commands
           echo "Waiting for darwin-mlflow to be ready on port 8080..."
-          echo "Note: MLflow server doesn't have /health endpoint"
-
           # Read PID and verify it exists
           if [ ! -f /tmp/darwin-mlflow.pid ]; then
             echo "ERROR: PID file not found!"
@@ -216,6 +214,24 @@ jobs:
             tail -n 100 /tmp/darwin-mlflow.log || true
             exit 1
           fi
+
+          echo "Waiting for darwin-mlflow to be ready on port 8080..."
+          for i in {1..40}; do
+            # Check if process is still running
+            if ! ps -p $(cat /tmp/darwin-mlflow.pid) > /dev/null 2>&1; then
+              echo "ERROR: darwin-mlflow process died!"
+              echo "Logs:"
+              tail -n 100 /tmp/darwin-mlflow.log || true
+              exit 1
+            fi
+            if curl -f http://127.0.0.1:8080/health > /tmp/curl-log.log 2>&1; then
+              echo "darwin-mlflow is ready!"
+              break
+            fi
+            echo "Attempt $i/40 - darwin-mlflow not ready yet, waiting..."
+            tail -n 100 /tmp/curl-log.log || true
+            sleep 3
+          done
 
       - name: Setup darwin-mlflow-app dependencies
         working-directory: mlflow
