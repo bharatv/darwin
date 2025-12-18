@@ -35,6 +35,8 @@ if [[ -z "${LOG_DIR:-}" ]]; then
     chmod 777 /var/log/darwin-mlflow-app/
     export LOG_DIR=/var/log/darwin-mlflow-app
   fi
+  else
+    mkdir -p "${LOG_DIR}"
 fi
 echo "Cding into app dir.."
 cd "$APP_DIR" || exit
