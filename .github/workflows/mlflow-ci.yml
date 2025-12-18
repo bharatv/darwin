@@ -187,38 +187,32 @@ jobs:
           echo "Starting darwin-mlflow server on port 8080..."
           chmod +x .odin/darwin-mlflow/start.sh
           bash .odin/darwin-mlflow/start.sh > /tmp/darwin-mlflow.log 2>&1 &
-          echo $! > /tmp/darwin-mlflow.pid
-          echo "darwin-mlflow PID: $(cat /tmp/darwin-mlflow.pid)"
+          MLFLOW_PID=$!
+          if [ -z "$MLFLOW_PID" ] || [ "$MLFLOW_PID" -le 0 ]; then
+            echo "ERROR: Failed to start darwin-mlflow process!"
+            cat /tmp/darwin-mlflow.log || true
+            exit 1
+          fi
+          echo "$MLFLOW_PID" > /tmp/darwin-mlflow.pid
+          echo "darwin-mlflow PID: $MLFLOW_PID"
+
           # Give the process a moment to start
           sleep 20
+
           # Check if process is still running
-          if ! ps -p $(cat /tmp/darwin-mlflow.pid) > /dev/null 2>&1; then
+          if ! ps -p "$MLFLOW_PID" > /dev/null 2>&1; then
             echo "ERROR: darwin-mlflow process died immediately!"
             echo "Logs:"
             cat /tmp/darwin-mlflow.log || true
             exit 1
           fi
+
           set +e  # Disable exit on error for curl commands
           echo "Waiting for darwin-mlflow to be ready on port 8080..."
-          # Read PID and verify it exists
-          if [ ! -f /tmp/darwin-mlflow.pid ]; then
-            echo "ERROR: PID file not found!"
-            exit 1
-          fi
-          MLFLOW_PID=$(cat /tmp/darwin-mlflow.pid)
-          echo "Checking MLflow process with PID: $MLFLOW_PID"
-          echo "Waiting for darwin-mlflow to be ready on port 8080..."
-          if ! ps -p $(cat /tmp/darwin-mlflow.pid) > /dev/null 2>&1; then
-            echo "ERROR: darwin-mlflow process died!"
-            echo "Logs:"
-            tail -n 100 /tmp/darwin-mlflow.log || true
-            exit 1
-          fi
 
-          echo "Waiting for darwin-mlflow to be ready on port 8080..."
           for i in {1..40}; do
             # Check if process is still running
-            if ! ps -p $(cat /tmp/darwin-mlflow.pid) > /dev/null 2>&1; then
+            if ! ps -p "$MLFLOW_PID" > /dev/null 2>&1; then
               echo "ERROR: darwin-mlflow process died!"
               echo "Logs:"
               tail -n 100 /tmp/darwin-mlflow.log || true
@@ -232,6 +226,25 @@ jobs:
             tail -n 100 /tmp/curl-log.log || true
             sleep 3
           done
+
+          # Final check
+          if ! curl -f http://127.0.0.1:8080/health > /tmp/curl-log.log 2>&1; then
+            echo "ERROR: darwin-mlflow failed to become ready!"
+            echo "Checking logs:"
+            tail -n 100 /tmp/darwin-mlflow.log || true
+            exit 1
+          fi
+
+          echo "Testing darwin-mlflow /health endpoint..."
+          response=$(curl -s http://127.0.0.1:8080/health)
+          echo "Response: $response"
+
+          if echo "$response" | grep -q "OK"; then
+            echo "✅ Health check passed!"
+          else
+            echo "❌ Health check failed! Expected response: OK"
+            exit 1
+          fi
 
       - name: Setup darwin-mlflow-app dependencies
         working-directory: mlflow
