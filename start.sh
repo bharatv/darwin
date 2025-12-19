@@ -161,7 +161,7 @@ if [ "$SDK_ENABLED" = "true" ] && [ "$COMPUTE_ENABLED" = "true" ]; then
   RESPONSE=$(curl -s -X POST http://localhost/compute/runtime/v2/create \
     -H "Content-Type: application/json" \
     -d '{
-      "runtime": "darwin-sdk-runtime-1.0",
+      "runtime": "1.0",
       "class": "CPU",
       "type": "Ray and Spark",
       "image": "localhost:5000/ray:2.37.0-darwin-sdk",
