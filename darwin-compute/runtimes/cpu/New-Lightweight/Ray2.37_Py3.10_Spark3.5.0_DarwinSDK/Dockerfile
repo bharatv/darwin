@@ -83,8 +83,7 @@ RUN pip uninstall -y \
     rich \
     NetworkX \
     Farama-Notifications \
-    colorful || true  # Prevent errors if a package isn't found \
-
+    colorful || true  # Prevent errors if a packaage is not found
 
 RUN pip install sparksql-magic
 
@@ -105,7 +104,8 @@ RUN pip install \
 COPY --chown=ray:users darwin-sdk /tmp/darwin-sdk
 RUN cd /tmp/darwin-sdk && pip install . && cd / && rm -rf /tmp/darwin-sdk
 
-RUN pip install backoff==1.10.0 \
+RUN pip install jupyterlab==4.3.0 \
+    backoff==1.10.0 \
     lxml \
     papermill
 
