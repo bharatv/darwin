@@ -1,6 +1,6 @@
 from typing import Union
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import EmailStr, TypeAdapter, ValidationError
 
 
 def validate_email(email: Union[str, None]) -> str:
@@ -22,7 +22,6 @@ def validate_email(email: Union[str, None]) -> str:
     try:
         # Use Pydantic's TypeAdapter for email validation
         # This uses the email-validator library under the hood for RFC 5322 compliance
-        from pydantic import EmailStr
         adapter = TypeAdapter(EmailStr)
         adapter.validate_python(email)
         return email
