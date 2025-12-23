@@ -514,7 +514,7 @@ jobs:
       - name: Initialize Darwin configuration for MLflow only
         run: |
           # Enable all services first to generate the full config
-          ./init.sh --all
+          bash ./init.sh --all
 
           # Modify configuration to enable only MLflow services
           echo "Configuring MLflow-only deployment..."
@@ -574,7 +574,7 @@ jobs:
       # #endregion
       - name: Setup Darwin platform
         run: |
-          ./setup.sh -y
+          bash ./setup.sh -y
 
       # #region agent log - disk monitoring after setup
       - name: Check disk space after setup
@@ -599,7 +599,7 @@ jobs:
       # #endregion
       - name: Deploy Darwin platform
         run: |
-          ./start.sh
+          bash ./start.sh
 
       # #region agent log - disk monitoring after deployment
       - name: Check disk space after deployment
