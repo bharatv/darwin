@@ -634,6 +634,9 @@ jobs:
       - name: Display final platform status
         if: always()
         run: |
+          echo "=== Config.env ==="
+          cat config.env || echo "No config.env found"
+          echo ""
           echo "=== Final Platform Status ==="
           echo ""
           echo "Pods:"
@@ -651,6 +654,9 @@ jobs:
       - name: Display service logs on failure
         if: failure()
         run: |
+          echo "=== Config.env ==="
+          cat config.env || echo "No config.env found"
+          echo ""
           echo "=== darwin-mlflow (MLflow backend) logs ==="
           kubectl logs -n darwin -l app=mlflow-lib --tail=200 || echo "No darwin-mlflow logs found"
           echo ""
@@ -666,6 +672,9 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          echo "=== Config.env ==="
+          cat config.env || echo "No config.env found"
+          echo ""
           echo "Cleaning up resources..."
           kind delete cluster --name kind || true
           echo "Cleanup complete"
