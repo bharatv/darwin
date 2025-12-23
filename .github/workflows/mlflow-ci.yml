@@ -402,6 +402,22 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.run_integration_test == true || github.event_name != 'workflow_dispatch'
 
     steps:
+      # #region agent log - disk space monitoring
+      - name: Check initial disk space and Docker state
+        run: |
+          echo "=== Initial Disk Space ==="
+          df -h
+          echo ""
+          echo "=== Docker Disk Usage ==="
+          docker system df || true
+          echo ""
+          echo "=== Docker Images ==="
+          docker images || true
+          echo ""
+          echo "=== Logging to debug file ==="
+          mkdir -p "$(dirname /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log)"
+          echo "{\"location\":\"mlflow-ci.yml:pre-checkout\",\"message\":\"Initial disk state\",\"data\":{\"disk\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":\"$(docker images -q | wc -l)\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+      # #endregion
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -447,6 +463,29 @@ jobs:
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           helm version
 
+      # #region agent log - pre-cleanup disk monitoring
+      - name: Clean up Docker resources before setup
+        run: |
+          echo "=== Disk Space Before Cleanup ==="
+          df -h
+          echo ""
+          echo "=== Docker System Info Before Cleanup ==="
+          docker system df
+          echo ""
+          echo "{\"location\":\"mlflow-ci.yml:pre-cleanup\",\"message\":\"Disk state before cleanup\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"docker_containers\":$(docker ps -aq | wc -l)},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+
+          echo "Cleaning up Docker resources..."
+          docker system prune -af --volumes || true
+
+          echo ""
+          echo "=== Disk Space After Cleanup ==="
+          df -h
+          echo ""
+          echo "=== Docker System Info After Cleanup ==="
+          docker system df
+          echo ""
+          echo "{\"location\":\"mlflow-ci.yml:post-cleanup\",\"message\":\"Disk state after cleanup\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"docker_containers\":$(docker ps -aq | wc -l)},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+      # #endregion
       - name: Cache Darwin dependencies
         uses: actions/cache@v4
         with:
@@ -507,14 +546,52 @@ jobs:
           echo "Enabled services:"
           cat .setup/enabled-services.yaml
 
+      # #region agent log - disk monitoring before setup
+      - name: Check disk space before setup
+        run: |
+          echo "=== Disk Space Before Setup ==="
+          df -h
+          echo ""
+          echo "{\"location\":\"mlflow-ci.yml:pre-setup\",\"message\":\"Disk state before setup.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,C\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+      # #endregion
       - name: Setup Darwin platform
         run: |
           ./setup.sh -y
 
+      # #region agent log - disk monitoring after setup
+      - name: Check disk space after setup
+        run: |
+          echo "=== Disk Space After Setup ==="
+          df -h
+          echo ""
+          echo "=== Docker Images After Setup ==="
+          docker images
+          echo ""
+          echo "{\"location\":\"mlflow-ci.yml:post-setup\",\"message\":\"Disk state after setup.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"total_image_size\":\"$(docker images --format '{{.Size}}' | head -10)\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,C,D\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+      # #endregion
+      # #region agent log - disk monitoring before deployment
+      - name: Check disk space before deployment
+        run: |
+          echo "=== Disk Space Before Deployment ==="
+          df -h
+          echo ""
+          echo "{\"location\":\"mlflow-ci.yml:pre-deploy\",\"message\":\"Disk state before start.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,D\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+      # #endregion
       - name: Deploy Darwin platform
         run: |
           ./start.sh
 
+      # #region agent log - disk monitoring after deployment
+      - name: Check disk space after deployment
+        run: |
+          echo "=== Disk Space After Deployment ==="
+          df -h
+          echo ""
+          echo "=== Kind Cluster Images ==="
+          docker exec kind-control-plane crictl images || true
+          echo ""
+          echo "{\"location\":\"mlflow-ci.yml:post-deploy\",\"message\":\"Disk state after start.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,D\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+      # #endregion
       - name: Wait for MLflow services to be ready
         run: |
           set -o allexport
