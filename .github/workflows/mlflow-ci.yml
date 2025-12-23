@@ -433,10 +433,7 @@ jobs:
           curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
           chmod +x /tmp/kind
           sudo mv /tmp/kind /usr/local/bin/kind
-          echo "DEBUG: kind installed, checking..."
-          which kind
           kind --version
-          echo "DEBUG: PATH after kind install: $PATH"
 
       - name: Install kubectl
         run: |
@@ -492,9 +489,15 @@ jobs:
           yq eval '.datastores.opensearch = false' -i .setup/enabled-services.yaml
           yq eval '.datastores.busybox = true' -i .setup/enabled-services.yaml
 
-          # Disable ray and serve images
-          yq eval '.ray-images = []' -i .setup/enabled-services.yaml
-          yq eval '.serve-images = []' -i .setup/enabled-services.yaml
+          # Disable all ray and serve images (set each to false)
+          # Get all ray image names and set them to false
+          yq eval '.ray-images | to_entries | .[] | .key' .setup/enabled-services.yaml | while read -r image; do
+            yq eval ".ray-images.\"$image\" = false" -i .setup/enabled-services.yaml
+          done
+          # Get all serve image names and set them to false
+          yq eval '.serve-images | to_entries | .[] | .key' .setup/enabled-services.yaml | while read -r image; do
+            yq eval ".serve-images.\"$image\" = false" -i .setup/enabled-services.yaml
+          done
 
           echo "MLflow-only configuration complete"
           echo "Enabled services:"
@@ -502,10 +505,6 @@ jobs:
 
       - name: Setup Darwin platform
         run: |
-          echo "DEBUG: Before setup.sh - checking kind availability..."
-          which kind || echo "kind not found in PATH"
-          command -v kind || echo "command -v kind failed"
-          echo "DEBUG: Current PATH: $PATH"
           ./setup.sh -y
 
       - name: Deploy Darwin platform
