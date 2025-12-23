@@ -50,7 +50,7 @@ fi
 
 # Source the config.env file
 set -o allexport
-. config.env
+. ./config.env # Only looks in the current directory and not searches through the PATH
 set +o allexport
 
 echo "🔧 Setting up KUBECONFIG: $KUBECONFIG"
