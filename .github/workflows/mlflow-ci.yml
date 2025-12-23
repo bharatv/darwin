@@ -457,47 +457,51 @@ jobs:
 
       - name: Initialize Darwin configuration for MLflow only
         run: |
-          # Enable all services first
+          # Enable all services first to generate the full config
           ./init.sh --all
 
           # Modify configuration to enable only MLflow services
           echo "Configuring MLflow-only deployment..."
 
-          # Disable all applications except MLflow
-          yq eval '.applications.darwin-ofs-v2 = false' -i .setup/enabled-services.yaml
-          yq eval '.applications.darwin-ofs-v2-admin = false' -i .setup/enabled-services.yaml
-          yq eval '.applications.darwin-ofs-v2-consumer = false' -i .setup/enabled-services.yaml
+          # Strategy: Disable ALL applications first, then enable only MLflow
+          # This is robust against new services being added
+
+          # Get all application keys and set them to false
+          yq eval '.applications | keys | .[]' .setup/enabled-services.yaml | while read -r app; do
+            yq eval ".applications.\"$app\" = false" -i .setup/enabled-services.yaml
+          done
+
+          # Enable only MLflow applications
           yq eval '.applications.darwin-mlflow = true' -i .setup/enabled-services.yaml
           yq eval '.applications.darwin-mlflow-app = true' -i .setup/enabled-services.yaml
-          yq eval '.applications.chronos = false' -i .setup/enabled-services.yaml
-          yq eval '.applications.chronos-consumer = false' -i .setup/enabled-services.yaml
-          yq eval '.applications.darwin-compute = false' -i .setup/enabled-services.yaml
-          yq eval '.applications.darwin-cluster-manager = false' -i .setup/enabled-services.yaml
-          yq eval '.applications.darwin-workspace = false' -i .setup/enabled-services.yaml
-          yq eval '.applications.ml-serve-app = false' -i .setup/enabled-services.yaml
-          yq eval '.applications.artifact-builder = false' -i .setup/enabled-services.yaml
-          yq eval '.applications.darwin-catalog = false' -i .setup/enabled-services.yaml
 
-          # Keep only required datastores: mysql and localstack
+          # Get all datastore keys and set them to false
+          yq eval '.datastores | keys | .[]' .setup/enabled-services.yaml | while read -r ds; do
+            yq eval ".datastores.\"$ds\" = false" -i .setup/enabled-services.yaml
+          done
+
+          # Enable only required datastores for MLflow
           yq eval '.datastores.mysql = true' -i .setup/enabled-services.yaml
-          yq eval '.datastores.cassandra = false' -i .setup/enabled-services.yaml
-          yq eval '.datastores.kafka = false' -i .setup/enabled-services.yaml
-          yq eval '.datastores.zookeeper = false' -i .setup/enabled-services.yaml
-          yq eval '.datastores.airflow = false' -i .setup/enabled-services.yaml
-          yq eval '.datastores.rabbitmq = false' -i .setup/enabled-services.yaml
           yq eval '.datastores.localstack = true' -i .setup/enabled-services.yaml
-          yq eval '.datastores.opensearch = false' -i .setup/enabled-services.yaml
           yq eval '.datastores.busybox = true' -i .setup/enabled-services.yaml
 
-          # Disable all ray and serve images (set each to false)
-          # Get all ray image names and set them to false
-          yq eval '.ray-images | to_entries | .[] | .key' .setup/enabled-services.yaml | while read -r image; do
+          # Disable all ray images
+          yq eval '.ray-images | to_entries | .[] | .key' .setup/enabled-services.yaml 2>/dev/null | while read -r image; do
             yq eval ".ray-images.\"$image\" = false" -i .setup/enabled-services.yaml
-          done
-          # Get all serve image names and set them to false
-          yq eval '.serve-images | to_entries | .[] | .key' .setup/enabled-services.yaml | while read -r image; do
+          done || true
+
+          # Disable all serve images
+          yq eval '.serve-images | to_entries | .[] | .key' .setup/enabled-services.yaml 2>/dev/null | while read -r image; do
             yq eval ".serve-images.\"$image\" = false" -i .setup/enabled-services.yaml
-          done
+          done || true
+
+          # Disable darwin-sdk-runtime if it exists
+          yq eval '.darwin-sdk-runtime.enabled = false' -i .setup/enabled-services.yaml 2>/dev/null || true
+
+          # Disable all CLI tools
+          yq eval '.cli-tools | keys | .[]' .setup/enabled-services.yaml 2>/dev/null | while read -r tool; do
+            yq eval ".cli-tools.\"$tool\" = false" -i .setup/enabled-services.yaml
+          done || true
 
           echo "MLflow-only configuration complete"
           echo "Enabled services:"
