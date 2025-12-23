@@ -5,9 +5,27 @@ CLUSTER_NAME=$CLUSTER_NAME
 KIND_CONFIG=$KIND_CONFIG
 KUBECONFIG=$KUBECONFIG
 
-if ! command -v kind &> /dev/null; then
+# #region agent log - debug kind detection
+echo "DEBUG: Checking for kind binary..."
+echo "DEBUG: Current PATH: $PATH"
+echo "DEBUG: Which kind: $(which kind 2>&1 || echo 'not found via which')"
+echo "DEBUG: Command -v kind: $(command -v kind 2>&1 || echo 'not found via command')"
+echo "DEBUG: /usr/local/bin/kind exists: $(test -f /usr/local/bin/kind && echo 'yes' || echo 'no')"
+if [ -f /usr/local/bin/kind ]; then
+    echo "DEBUG: /usr/local/bin/kind is executable: $(test -x /usr/local/bin/kind && echo 'yes' || echo 'no')"
+fi
+# #endregion
+
+if ! command -v kind >/dev/null 2>&1; then
     echo "kind could not be found, installing it"
-    brew install kind || apt-get install kind
+    if command -v brew >/dev/null 2>&1; then
+        brew install kind
+    else
+        # Install kind binary directly on Linux
+        curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+        chmod +x /tmp/kind
+        sudo mv /tmp/kind /usr/local/bin/kind
+    fi
 fi
 
 export KUBECONFIG=$KUBECONFIG
