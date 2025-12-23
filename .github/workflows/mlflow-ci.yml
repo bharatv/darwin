@@ -517,7 +517,10 @@ jobs:
 
       - name: Wait for MLflow services to be ready
         run: |
-          source config.env
+          set -o allexport
+          . ./config.env
+          set +o allexport
+
           echo "Waiting for MLflow services to be ready..."
 
           # Wait for darwin-mlflow (MLflow backend)
@@ -634,9 +637,10 @@ jobs:
       - name: Display final platform status
         if: always()
         run: |
-          echo "=== Config.env ==="
-          source config.env || echo "No config.env found"
-          echo ""
+          set -o allexport
+          . ./config.env
+          set +o allexport
+
           echo "=== Final Platform Status ==="
           echo ""
           echo "Pods:"
@@ -654,9 +658,10 @@ jobs:
       - name: Display service logs on failure
         if: failure()
         run: |
-          echo "=== Config.env ==="
-          source config.env || echo "No config.env found"
-          echo ""
+          set -o allexport
+          . ./config.env
+          set +o allexport
+
           echo "=== darwin-mlflow (MLflow backend) logs ==="
           kubectl logs -n darwin -l app=mlflow-lib --tail=200 || echo "No darwin-mlflow logs found"
           echo ""
@@ -673,7 +678,10 @@ jobs:
         if: always()
         run: |
           echo "=== Config.env ==="
-          source config.env || echo "No config.env found"
+          set -o allexport
+          . ./config.env
+          set +o allexport
+
           echo ""
           echo "Cleaning up resources..."
           kind delete cluster --name kind || true
