@@ -752,6 +752,13 @@ jobs:
           echo ""
           echo "Events:"
           kubectl get events -n darwin --sort-by='.lastTimestamp' | tail -20
+          echo ""
+          echo "=== Pod Descriptions (for troubleshooting) ==="
+          kubectl describe pods -n darwin -l app=mysql | tail -50
+          echo ""
+          kubectl describe pods -n darwin -l app=mlflow-lib | tail -50
+          echo ""
+          kubectl describe pods -n darwin -l app=mlflow-app | tail -50
 
       - name: Display service logs on failure
         if: failure()
@@ -760,14 +767,29 @@ jobs:
           . ./config.env
           set +o allexport
 
-          echo "=== darwin-mlflow (MLflow backend) logs ==="
-          kubectl logs -n darwin -l app=mlflow-lib --tail=200 || echo "No darwin-mlflow logs found"
-          echo ""
-          echo "=== darwin-mlflow-app (FastAPI app layer) logs ==="
-          kubectl logs -n darwin -l app=mlflow-app --tail=200 || echo "No darwin-mlflow-app logs found"
+          echo "=== Datastore Health Check Job Logs ==="
+          kubectl logs -n darwin -l job-name=darwin-datastore-health-check --tail=200 || echo "No datastore health check logs found"
           echo ""
           echo "=== MySQL logs ==="
-          kubectl logs -n darwin -l app=mysql --tail=100 || echo "No MySQL logs found"
+          kubectl logs -n darwin -l app=mysql --tail=200 || echo "No MySQL logs found"
+          echo ""
+          echo "=== MLflow-lib Init Container Logs ==="
+          for pod in $(kubectl get pods -n darwin -l app=mlflow-lib -o name); do
+            echo "Pod: $pod"
+            kubectl logs -n darwin $pod -c wait-for-datastore-health --tail=100 || echo "No init container logs"
+          done
+          echo ""
+          echo "=== MLflow-app Init Container Logs ==="
+          for pod in $(kubectl get pods -n darwin -l app=mlflow-app -o name); do
+            echo "Pod: $pod"
+            kubectl logs -n darwin $pod -c wait-for-datastore-health --tail=100 || echo "No init container logs"
+          done
+          echo ""
+          echo "=== darwin-mlflow (MLflow backend) logs ==="
+          kubectl logs -n darwin -l app=mlflow-lib --tail=200 || echo "No darwin-mlflow main container logs found"
+          echo ""
+          echo "=== darwin-mlflow-app (FastAPI app layer) logs ==="
+          kubectl logs -n darwin -l app=mlflow-app --tail=200 || echo "No darwin-mlflow-app main container logs found"
           echo ""
           echo "=== LocalStack logs ==="
           kubectl logs -n darwin -l app=localstack --tail=100 || echo "No LocalStack logs found"
