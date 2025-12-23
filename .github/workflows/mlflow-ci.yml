@@ -510,9 +510,18 @@ jobs:
       - name: Setup Darwin platform
         run: |
           ./setup.sh -y
+          echo "Setup completed. Checking config.env..."
+          ls -la config.env || echo "config.env not created by setup.sh!"
+          echo "Contents of config.env:"
+          cat config.env || echo "Cannot read config.env"
 
       - name: Deploy Darwin platform
         run: |
+          echo "Checking for config.env..."
+          ls -la config.env || echo "config.env not found!"
+          echo "Current directory: $(pwd)"
+          echo "Contents of config.env:"
+          cat config.env || echo "Cannot read config.env"
           ./start.sh
 
       - name: Wait for MLflow services to be ready
