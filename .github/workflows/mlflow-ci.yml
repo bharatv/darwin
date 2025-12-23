@@ -415,8 +415,8 @@ jobs:
           docker images || true
           echo ""
           echo "=== Logging to debug file ==="
-          mkdir -p "$(dirname /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log)"
-          echo "{\"location\":\"mlflow-ci.yml:pre-checkout\",\"message\":\"Initial disk state\",\"data\":{\"disk\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":\"$(docker images -q | wc -l)\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+          mkdir -p .cursor
+          echo "{\"location\":\"mlflow-ci.yml:pre-checkout\",\"message\":\"Initial disk state\",\"data\":{\"disk\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":\"$(docker images -q | wc -l)\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> .cursor/debug.log
       # #endregion
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -472,7 +472,7 @@ jobs:
           echo "=== Docker System Info Before Cleanup ==="
           docker system df
           echo ""
-          echo "{\"location\":\"mlflow-ci.yml:pre-cleanup\",\"message\":\"Disk state before cleanup\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"docker_containers\":$(docker ps -aq | wc -l)},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+          echo "{\"location\":\"mlflow-ci.yml:pre-cleanup\",\"message\":\"Disk state before cleanup\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"docker_containers\":$(docker ps -aq | wc -l)},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> .cursor/debug.log
 
           echo "Cleaning up Docker resources..."
           docker system prune -af --volumes || true
@@ -484,7 +484,7 @@ jobs:
           echo "=== Docker System Info After Cleanup ==="
           docker system df
           echo ""
-          echo "{\"location\":\"mlflow-ci.yml:post-cleanup\",\"message\":\"Disk state after cleanup\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"docker_containers\":$(docker ps -aq | wc -l)},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+          echo "{\"location\":\"mlflow-ci.yml:post-cleanup\",\"message\":\"Disk state after cleanup\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"docker_containers\":$(docker ps -aq | wc -l)},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> .cursor/debug.log
       # #endregion
       - name: Cache Darwin dependencies
         uses: actions/cache@v4
@@ -552,7 +552,7 @@ jobs:
           echo "=== Disk Space Before Setup ==="
           df -h
           echo ""
-          echo "{\"location\":\"mlflow-ci.yml:pre-setup\",\"message\":\"Disk state before setup.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,C\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+          echo "{\"location\":\"mlflow-ci.yml:pre-setup\",\"message\":\"Disk state before setup.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,C\"}" >> .cursor/debug.log
       # #endregion
       - name: Setup Darwin platform
         run: |
@@ -567,7 +567,7 @@ jobs:
           echo "=== Docker Images After Setup ==="
           docker images
           echo ""
-          echo "{\"location\":\"mlflow-ci.yml:post-setup\",\"message\":\"Disk state after setup.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"total_image_size\":\"$(docker images --format '{{.Size}}' | head -10)\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,C,D\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+          echo "{\"location\":\"mlflow-ci.yml:post-setup\",\"message\":\"Disk state after setup.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"total_image_size\":\"$(docker images --format '{{.Size}}' | head -10)\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,C,D\"}" >> .cursor/debug.log
       # #endregion
       # #region agent log - disk monitoring before deployment
       - name: Check disk space before deployment
@@ -575,7 +575,7 @@ jobs:
           echo "=== Disk Space Before Deployment ==="
           df -h
           echo ""
-          echo "{\"location\":\"mlflow-ci.yml:pre-deploy\",\"message\":\"Disk state before start.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,D\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+          echo "{\"location\":\"mlflow-ci.yml:pre-deploy\",\"message\":\"Disk state before start.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,D\"}" >> .cursor/debug.log
       # #endregion
       - name: Deploy Darwin platform
         run: |
@@ -590,7 +590,7 @@ jobs:
           echo "=== Kind Cluster Images ==="
           docker exec kind-control-plane crictl images || true
           echo ""
-          echo "{\"location\":\"mlflow-ci.yml:post-deploy\",\"message\":\"Disk state after start.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,D\"}" >> /Users/dhruv.mehta/IdeaProjects/darwin/.cursor/debug.log
+          echo "{\"location\":\"mlflow-ci.yml:post-deploy\",\"message\":\"Disk state after start.sh\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\"},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"B,D\"}" >> .cursor/debug.log
       # #endregion
       - name: Wait for MLflow services to be ready
         run: |
