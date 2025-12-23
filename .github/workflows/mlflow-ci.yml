@@ -464,7 +464,7 @@ jobs:
           helm version
 
       # #region agent log - pre-cleanup disk monitoring
-      - name: Clean up Docker resources before setup
+      - name: Free up disk space for Darwin build
         run: |
           echo "=== Disk Space Before Cleanup ==="
           df -h
@@ -475,8 +475,23 @@ jobs:
           mkdir -p .cursor
           echo "{\"location\":\"mlflow-ci.yml:pre-cleanup\",\"message\":\"Disk state before cleanup\",\"data\":{\"disk_available\":\"$(df -h / | tail -1 | awk '{print $4}')\",\"docker_images\":$(docker images -q | wc -l),\"docker_containers\":$(docker ps -aq | wc -l)},\"timestamp\":$(date +%s)000,\"sessionId\":\"debug-session\",\"runId\":\"mlflow-ci\",\"hypothesisId\":\"A,E\"}" >> .cursor/debug.log
 
-          echo "Cleaning up Docker resources..."
+          echo "Freeing up disk space..."
+
+          # Remove unnecessary pre-installed software to free up ~10GB
+          echo "Removing unnecessary software..."
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
+
+          # Clean Docker
+          echo "Cleaning Docker resources..."
           docker system prune -af --volumes || true
+
+          # Clean apt cache
+          echo "Cleaning apt cache..."
+          sudo apt-get clean || true
 
           echo ""
           echo "=== Disk Space After Cleanup ==="
