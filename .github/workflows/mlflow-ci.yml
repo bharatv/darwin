@@ -635,7 +635,7 @@ jobs:
         if: always()
         run: |
           echo "=== Config.env ==="
-          cat config.env || echo "No config.env found"
+          source config.env || echo "No config.env found"
           echo ""
           echo "=== Final Platform Status ==="
           echo ""
@@ -655,7 +655,7 @@ jobs:
         if: failure()
         run: |
           echo "=== Config.env ==="
-          cat config.env || echo "No config.env found"
+          source config.env || echo "No config.env found"
           echo ""
           echo "=== darwin-mlflow (MLflow backend) logs ==="
           kubectl logs -n darwin -l app=mlflow-lib --tail=200 || echo "No darwin-mlflow logs found"
@@ -673,7 +673,7 @@ jobs:
         if: always()
         run: |
           echo "=== Config.env ==="
-          cat config.env || echo "No config.env found"
+          source config.env || echo "No config.env found"
           echo ""
           echo "Cleaning up resources..."
           kind delete cluster --name kind || true
