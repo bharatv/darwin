@@ -767,6 +767,19 @@ jobs:
           . ./config.env
           set +o allexport
 
+          # Verify KUBECONFIG is set and cluster is accessible
+          echo "KUBECONFIG: $KUBECONFIG"
+          echo ""
+          echo "=== Checking Cluster Access ==="
+          kubectl cluster-info || echo "Cannot access cluster"
+          echo ""
+          echo "=== Available Namespaces ==="
+          kubectl get namespaces
+          echo ""
+          echo "=== All Pods in darwin namespace ==="
+          kubectl get pods -n darwin -o wide || echo "Cannot list pods in darwin namespace"
+          echo ""
+
           echo "=== Datastore Health Check Job Logs ==="
           kubectl logs -n darwin -l job-name=darwin-datastore-health-check --tail=200 || echo "No datastore health check logs found"
           echo ""
