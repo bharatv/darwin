@@ -142,8 +142,9 @@ def generate_fastapi_values_for_one_click_model_deployment(
         stream_content = stream.read()
         values = yaml.safe_load(stream_content)
 
-    # For one-click deployments, serve_name is just the name (no env suffix)
-    serve_name = name
+    # Use consistent naming convention: {env}-{serve}
+    # This matches regular deployments and ensures proper resource management
+    serve_name = f"{env}-{name}"
     host_name = get_host_name(name, env, env_config, is_environment_protected=False)
 
     values['replicaCount'] = min_replicas

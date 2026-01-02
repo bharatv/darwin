@@ -19,7 +19,7 @@ from ml_serve_core.constants.constants import (
 from ml_serve_core.config.configs import Config
 from ml_serve_core.dtos.dtos import EnvConfig
 from ml_serve_core.service.serve_config_service import ServeConfigService
-from ml_serve_core.utils.utils import get_host_name, get_service_url, get_service_url_for_one_click
+from ml_serve_core.utils.utils import get_host_name, get_service_url
 from ml_serve_core.utils.yaml_utils import generate_fastapi_values, generate_fastapi_infra_values, \
     generate_fastapi_values_for_one_click_model_deployment
 from ml_serve_core.utils.storage_strategy import determine_storage_strategy
@@ -642,7 +642,7 @@ class DeploymentService:
         )
 
         await self.dcm_client.start_resource(
-            resource_id=serve.name,
+            resource_id=f"{env.name}-{serve.name}",
             artifact_id=artifact_identifier,
             kube_cluster=env_config.cluster_name,
             namespace=env_config.namespace,
@@ -666,7 +666,7 @@ class DeploymentService:
         await self._update_active_deployment(serve, env, deployment)
 
         return {
-            "service_url": get_service_url_for_one_click(serve.name, env_config)
+            "service_url": get_service_url(serve.name, env.name, env_config, env.is_protected)
         }
 
     async def undeploy_model(self, request: ModelUndeployRequest) -> dict:
@@ -715,7 +715,9 @@ class DeploymentService:
         
         # For one-click deployments, resource_id is just the serve_name
         # (unlike regular serves which use {env.name}-{serve.name})
-        resource_id = serve_name
+        # Use consistent naming convention: {env}-{serve}
+        # This matches regular deployments and infra config updates
+        resource_id = f"{env.name}-{serve_name}"
 
         # 4. Stop the resource via DCM
         try:
