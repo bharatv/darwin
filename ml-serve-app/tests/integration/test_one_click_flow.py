@@ -279,10 +279,13 @@ class TestOneClickDeploymentWithRealModel:
             if serve_name not in pod_check_any.stdout:
                 pytest.skip("Deployment marked as 'already deployed' but no pods exist. Manual cleanup may be needed.")
         
+        # Pod/service name includes environment prefix: {env}-{serve_name}
+        full_serve_name = f"{integration_test_env}-{serve_name}"
+        
         # If not already deployed, wait for pods
         if not already_deployed:
             pod_ready = wait_for_pod_ready(
-                pod_name_prefix=serve_name,
+                pod_name_prefix=full_serve_name,
                 namespace="serve",
                 max_attempts=60,
                 delay=2
@@ -292,7 +295,7 @@ class TestOneClickDeploymentWithRealModel:
             print("⚠️  Skipping pod ready check for existing deployment...")
         
         # Wait for service to respond
-        service_url = f"http://localhost/{serve_name}"
+        service_url = f"http://localhost/{full_serve_name}"
         service_ready = await wait_for_service(
             f"{service_url}/healthcheck",
             max_attempts=15 if already_deployed else 30,  # 30s vs 60s
