@@ -405,6 +405,21 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.run_integration_test == true || github.event_name != 'workflow_dispatch'
 
     steps:
+      - name: Cleanup workspace before checkout
+        if: always()
+        run: |
+          WORKSPACE_DIR="${{ github.workspace }}"
+          if [ -d "$WORKSPACE_DIR" ]; then
+            echo "Cleaning up workspace directory: $WORKSPACE_DIR"
+            if [ -d "$WORKSPACE_DIR/kind" ]; then
+              echo "Cleaning up kind directory..."
+              sudo chmod -R u+w "$WORKSPACE_DIR/kind" 2>/dev/null || true
+              sudo rm -rf "$WORKSPACE_DIR/kind/shared-storage" 2>/dev/null || true
+              find "$WORKSPACE_DIR/kind" -type d -name "shared-storage" -exec sudo rm -rf {} + 2>/dev/null || true
+            fi
+          fi
+          echo "✅ Cleanup completed"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
