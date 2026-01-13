@@ -406,7 +406,6 @@ jobs:
 
     steps:
       - name: Cleanup workspace before checkout
-        if: always()
         run: |
           WORKSPACE_DIR="${{ github.workspace }}"
           if [ -d "$WORKSPACE_DIR" ]; then
