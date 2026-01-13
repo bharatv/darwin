@@ -1,6 +1,12 @@
 #!/bin/sh
 set -e
 
+# Get the project root directory (same as setup.sh and start-cluster.sh)
+# This ensures config.env is always read from the same location
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+CONFIG_ENV="$PROJECT_ROOT/config.env"
+
 # Check for init configuration
 ENABLED_SERVICES_FILE=".setup/enabled-services.yaml"
 if [ ! -f "$ENABLED_SERVICES_FILE" ]; then
@@ -49,8 +55,13 @@ if [ "$HERMES_CLI_ENABLED" = "true" ]; then
 fi
 
 # Source the config.env file
+if [ ! -f "$CONFIG_ENV" ]; then
+    echo "❌ config.env not found at $CONFIG_ENV"
+    echo "   Please run ./setup.sh first to create config.env"
+    exit 1
+fi
 set -o allexport
-. ./config.env # Only looks in the current directory and not searches through the PATH
+. "$CONFIG_ENV"
 set +o allexport
 
 echo "🔧 Setting up KUBECONFIG: $KUBECONFIG"
@@ -90,6 +101,7 @@ get_helm_path() {
     "darwin-compute") echo "services.services.compute.enabled" ;;
     "darwin-cluster-manager") echo "services.services.cluster-manager.enabled" ;;
     "darwin-workspace") echo "services.services.workspace.enabled" ;;
+    "darwin-workflow") echo "services.services.workflow.enabled" ;;
     "ml-serve-app") echo "services.services.ml-serve-app.enabled" ;;
     "artifact-builder") echo "services.services.artifact-builder.enabled" ;;
     "darwin-catalog") echo "services.services.catalog.enabled" ;;
@@ -128,14 +140,84 @@ echo ""
 echo "📦 Installing Darwin Platform with configuration overrides..."
 
 # Install Darwin Platform umbrella chart with overrides
+echo "   Deploying helm chart (with --wait for all pods)..."
+echo "   This may take several minutes..."
 helm upgrade --install darwin ./helm/darwin \
   --namespace darwin \
   --create-namespace \
   --wait \
   --timeout 600s \
   $HELM_OVERRIDES
+HELM_EXIT_CODE=$?
+
+if [ $HELM_EXIT_CODE -ne 0 ]; then
+  echo "❌ Helm deployment failed with exit code $HELM_EXIT_CODE!"
+  echo ""
+  echo "Checking deployment status..."
+  helm status darwin -n darwin 2>/dev/null || echo "   (helm release not found)"
+  echo ""
+  echo "Checking pods..."
+  kubectl get pods -n darwin 2>/dev/null || echo "   (no pods found)"
+  echo ""
+  echo "Checking helm release history..."
+  helm history darwin -n darwin 2>/dev/null || echo "   (no history found)"
+  exit 1
+fi
+
+echo "✅ Helm chart deployed (all pods ready via --wait)"
 
 echo "✅ Deployment completed!"
+
+# ============================================================================
+# REGISTER DARWIN SDK RUNTIME
+# ============================================================================
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "               REGISTERING DARWIN SDK RUNTIME"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Check if BOTH darwin-sdk-runtime AND darwin-compute are enabled
+SDK_ENABLED=$(yq eval '.darwin-sdk-runtime.enabled // false' "$ENABLED_SERVICES_FILE")
+COMPUTE_ENABLED=$(yq eval '.applications.darwin-compute // false' "$ENABLED_SERVICES_FILE")
+
+if [ "$SDK_ENABLED" = "true" ] && [ "$COMPUTE_ENABLED" = "true" ]; then
+  echo "📦 Registering darwin-sdk runtime as '1.0'..."
+  
+  # Wait for darwin-compute to be ready via ingress
+  echo "   Waiting for darwin-compute to be ready..."
+  sleep 5
+  
+  # Register the runtime via ingress (localhost/compute)
+  # Add timeout to prevent hanging in CI
+  set +e
+  RESPONSE=$(curl -s --max-time 30 -X POST http://localhost/compute/runtime/v2/create \
+    -H "Content-Type: application/json" \
+    -d '{
+      "runtime": "1.0",
+      "class": "CPU",
+      "type": "Ray and Spark",
+      "image": "localhost:5000/ray:2.37.0-darwin-sdk",
+      "user": "Darwin",
+      "spark_connect": false,
+      "spark_auto_init": true
+    }' 2>&1)
+  CURL_EXIT_CODE=$?
+  set -e
+  
+  # Check response
+  if [ $CURL_EXIT_CODE -eq 0 ] && echo "$RESPONSE" | grep -q '"status":"SUCCESS"'; then
+    echo "   ✅ Darwin SDK runtime '1.0' registered successfully"
+  else
+    echo "   ⚠️  Runtime registration failed or incomplete (curl exit: $CURL_EXIT_CODE)"
+    echo "   ⚠️  Response: $RESPONSE"
+    echo "   ⚠️  This is non-critical, continuing..."
+  fi
+elif [ "$SDK_ENABLED" != "true" ]; then
+  echo "⏭️  Skipping darwin-sdk runtime registration (darwin-sdk-runtime disabled)"
+else
+  echo "⏭️  Skipping darwin-sdk runtime registration (darwin-compute disabled)"
+fi
 
 # Show hermes-cli activation reminder if it was installed
 HERMES_CLI_ENABLED=$(yq eval '.cli-tools.hermes-cli // false' "$ENABLED_SERVICES_FILE" 2>/dev/null || echo "false")

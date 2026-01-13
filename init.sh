@@ -20,6 +20,12 @@ if [ ! -f "$YAML_FILE" ]; then
   exit 1
 fi
 
+DEP_FILE="service-dependencies.yaml"
+if [ ! -f "$DEP_FILE" ]; then
+  echo "❌ $DEP_FILE not found in current directory."
+  exit 1
+fi
+
 # Create .setup directory if it doesn't exist
 mkdir -p .setup
 
@@ -81,9 +87,10 @@ FEATURE_APPS_mlflow="darwin-mlflow darwin-mlflow-app"
 FEATURE_APPS_serve="ml-serve-app artifact-builder"
 FEATURE_APPS_catalog="darwin-catalog"
 FEATURE_APPS_chronos="chronos chronos-consumer"
+FEATURE_APPS_workflow="darwin-workflow"
 
 # List of all top-level features
-ALL_FEATURES="compute workspace feature_store mlflow serve catalog chronos"
+ALL_FEATURES="compute workspace feature_store mlflow serve catalog chronos workflow"
 
 # Service-to-service dependencies
 # Format: SERVICE_DEPS_<service>="dep1 dep2" (use underscores for hyphens in var names)
@@ -100,6 +107,7 @@ SERVICE_DEPS_darwin_workspace="darwin-compute"
 SERVICE_DEPS_ml_serve_app="artifact-builder darwin-cluster-manager darwin-mlflow-app"
 SERVICE_DEPS_artifact_builder=""
 SERVICE_DEPS_darwin_catalog=""
+SERVICE_DEPS_darwin_workflow="darwin-compute darwin-cluster-manager"
 
 # Service-to-datastore dependencies
 # Format: SERVICE_DATASTORES_<service>="ds1 ds2 ds3"
@@ -116,15 +124,11 @@ SERVICE_DATASTORES_darwin_workspace="mysql busybox"
 SERVICE_DATASTORES_ml_serve_app="mysql localstack busybox"
 SERVICE_DATASTORES_artifact_builder="mysql localstack busybox"
 SERVICE_DATASTORES_darwin_catalog="mysql localstack"
+SERVICE_DATASTORES_darwin_workflow="mysql elasticsearch localstack busybox airflow"
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
-
-# Convert service name to variable-safe name (replace hyphens with underscores)
-to_var_name() {
-  echo "$1" | tr '-' '_'
-}
 
 # Get feature apps by feature name
 get_feature_apps() {
@@ -136,15 +140,13 @@ get_feature_apps() {
 # Get service dependencies
 get_service_deps() {
   local service="$1"
-  local var_name="SERVICE_DEPS_$(to_var_name "$service")"
-  eval echo "\$$var_name"
+  yq eval ".services[\"$service\"].required_services[]" "$DEP_FILE" 2>/dev/null
 }
 
 # Get service datastores
 get_service_datastores() {
   local service="$1"
-  local var_name="SERVICE_DATASTORES_$(to_var_name "$service")"
-  eval echo "\$$var_name"
+  yq eval ".services[\"$service\"].required_datastores[]" "$DEP_FILE" 2>/dev/null
 }
 
 # Check if item is in space-separated list
@@ -301,6 +303,7 @@ FEATURE_DESC_mlflow="MLflow"
 FEATURE_DESC_serve="Serve"
 FEATURE_DESC_catalog="Catalog"
 FEATURE_DESC_chronos="Chronos"
+FEATURE_DESC_workflow="Workflow"
 
 # Collect user selections
 SELECTED_FEATURES=""
@@ -365,6 +368,78 @@ if [ "$ALL_YES" != "true" ] && [ -n "$SELECTED_FEATURES" ]; then
     echo "❌ Configuration cancelled."
     exit 0
   fi
+fi
+
+# ============================================================================
+# DARWIN SDK RUNTIME (auto-enabled if darwin-compute is enabled)
+# ============================================================================
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "                    DARWIN SDK RUNTIME"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+DARWIN_SDK_ENABLED=false
+
+# Check if darwin-sdk-runtime is defined in services.yaml
+sdk_defined=$(yq eval '.darwin-sdk-runtime.enabled' "$YAML_FILE")
+if [ "$sdk_defined" = "true" ]; then
+  sdk_image=$(yq eval '.darwin-sdk-runtime.image-name' "$YAML_FILE")
+  
+  if [ "$ALL_YES" = "true" ]; then
+    DARWIN_SDK_ENABLED=true
+  elif list_contains "$ENABLED_SERVICES" "darwin-compute"; then
+    # Prompt user if darwin-compute is enabled
+    prompt_yn "  Enable Darwin SDK Runtime ($sdk_image)? (includes Spark support)" "y"
+    if [ "$PROMPT_RESULT" = "true" ]; then
+      DARWIN_SDK_ENABLED=true
+    fi
+  else
+    echo "  ⏭️  Darwin SDK Runtime skipped (requires darwin-compute)"
+  fi
+fi
+
+# ============================================================================
+# RAY RUNTIMES (select specific runtimes when darwin-compute is enabled)
+# ============================================================================
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "                       RAY RUNTIMES"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+ENABLED_RAY_IMAGES=""
+
+ray_count=$(yq eval '.ray-images | length' "$YAML_FILE")
+if [ "$ray_count" = "0" ] || [ "$ray_count" = "null" ]; then
+  echo "  ⏭️  No Ray runtimes defined in services.yaml"
+elif list_contains "$ENABLED_SERVICES" "darwin-compute"; then
+  echo "Select which Ray runtimes to enable:"
+  echo ""
+  
+  i=0
+  while [ $i -lt $ray_count ]; do
+    image_name=$(yq eval ".ray-images[$i].image-name" "$YAML_FILE")
+    
+    if [ "$ALL_YES" = "true" ]; then
+      ENABLED_RAY_IMAGES=$(list_add "$ENABLED_RAY_IMAGES" "$image_name")
+    else
+      prompt_yn "  Enable $image_name?" "y"
+      if [ "$PROMPT_RESULT" = "true" ]; then
+        ENABLED_RAY_IMAGES=$(list_add "$ENABLED_RAY_IMAGES" "$image_name")
+      fi
+    fi
+    
+    i=$((i + 1))
+  done
+  
+  if [ -z "$ENABLED_RAY_IMAGES" ]; then
+    echo ""
+    echo "  ⚠️  No Ray runtimes selected. Enabling ray:2.37.0 as default."
+    ENABLED_RAY_IMAGES="ray:2.37.0"
+  fi
+else
+  echo "  ⏭️  Ray runtimes skipped (requires darwin-compute)"
 fi
 
 # ============================================================================
@@ -456,8 +531,8 @@ else
   while [ $i -lt $ray_count ]; do
     image_name=$(yq eval ".ray-images[$i].image-name" "$YAML_FILE")
     
-    if [ "$COMPUTE_ENABLED" = "true" ]; then
-      echo "  \"$image_name\": true  # (auto-enabled with darwin-compute)" >> "$OUTPUT_FILE"
+    if list_contains "$ENABLED_RAY_IMAGES" "$image_name"; then
+      echo "  \"$image_name\": true  # (selected)" >> "$OUTPUT_FILE"
     else
       echo "  \"$image_name\": false" >> "$OUTPUT_FILE"
     fi
@@ -514,6 +589,12 @@ fi
 
 echo "" >> "$OUTPUT_FILE"
 
+# Write darwin-sdk-runtime section
+echo "darwin-sdk-runtime:" >> "$OUTPUT_FILE"
+echo "  enabled: $DARWIN_SDK_ENABLED" >> "$OUTPUT_FILE"
+
+echo "" >> "$OUTPUT_FILE"
+
 # Write cli-tools section
 echo "cli-tools:" >> "$OUTPUT_FILE"
 echo "  hermes-cli: $HERMES_CLI_ENABLED" >> "$OUTPUT_FILE"
@@ -545,11 +626,17 @@ else
   echo "   (none)"
 fi
 
-# Show ray images only if compute is enabled
-if [ "$COMPUTE_ENABLED" = "true" ]; then
+# Show ray images if any are enabled
+if [ -n "$ENABLED_RAY_IMAGES" ]; then
   echo ""
-  echo "🔷 Ray Images (auto-enabled with darwin-compute):"
-  yq eval '.ray-images | to_entries | .[] | select(.value == true) | "   ✓ " + .key' "$OUTPUT_FILE" 2>/dev/null || echo "   (none)"
+  echo "🔷 Ray Images (selected):"
+  for img in $ENABLED_RAY_IMAGES; do
+    echo "   ✓ $img"
+  done
+elif [ "$COMPUTE_ENABLED" = "true" ]; then
+  echo ""
+  echo "🔷 Ray Images:"
+  echo "   (none selected)"
 fi
 
 # Show serve images only if ml-serve-app is enabled
@@ -575,6 +662,13 @@ if [ "$HERMES_CLI_ENABLED" = "true" ]; then
   echo "   ✓ hermes-cli"
 else
   echo "   (none)"
+fi
+
+# Show darwin-sdk runtime status
+if [ "$DARWIN_SDK_ENABLED" = "true" ]; then
+  echo ""
+  echo "🔷 Darwin SDK Runtime:"
+  echo "   ✓ ray:2.37.0-darwin-sdk (Ray + Spark + Darwin SDK)"
 fi
 
 echo ""
