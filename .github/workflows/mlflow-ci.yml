@@ -44,7 +44,8 @@ permissions:
 jobs:
   lint-and-typecheck:
     name: Lint and Type Check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, darwin]
+    timeout-minutes: 15
     if: github.event_name == 'workflow_dispatch' && inputs.run_lint == true || github.event_name != 'workflow_dispatch'
 
     steps:
@@ -81,7 +82,8 @@ jobs:
 
   unit-tests:
     name: Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, darwin]
+    timeout-minutes: 15
     if: github.event_name == 'workflow_dispatch' || github.event_name != 'workflow_dispatch'
 
     steps:
@@ -111,7 +113,8 @@ jobs:
 
   service-health-check:
     name: Service Health Check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, darwin]
+    timeout-minutes: 15
     if: github.event_name == 'workflow_dispatch' && inputs.run_health_check == true || github.event_name != 'workflow_dispatch'
 
     services:
@@ -397,7 +400,7 @@ jobs:
 
   mlflow-integration-test:
     name: MLflow Integration Test with Kubernetes
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, darwin]
     timeout-minutes: 60
     if: github.event_name == 'workflow_dispatch' && inputs.run_integration_test == true || github.event_name != 'workflow_dispatch'
 
