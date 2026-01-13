@@ -400,7 +400,7 @@ jobs:
 
   mlflow-integration-test:
     name: MLflow Integration Test with Kubernetes
-    runs-on: [self-hosted, Linux, X64, darwin]
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 60
     if: github.event_name == 'workflow_dispatch' && inputs.run_integration_test == true || github.event_name != 'workflow_dispatch'
 
