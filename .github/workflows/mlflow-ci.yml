@@ -41,6 +41,10 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: mlflow-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-typecheck:
     name: Lint and Type Check
