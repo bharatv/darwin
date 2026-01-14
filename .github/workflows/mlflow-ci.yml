@@ -407,7 +407,11 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 60
     if: github.event_name == 'workflow_dispatch' && inputs.run_integration_test == true || github.event_name != 'workflow_dispatch'
-
+    defaults:
+      run:
+        working-directory: .
+    env:
+      KUBECONFIG: ./kind/config/kindkubeconfig.yaml
     steps:
       - name: Cleanup workspace before checkout
         run: |
