@@ -426,47 +426,68 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.9
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
+      # - name: Set up Python 3.9
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version: "3.9"
 
-      - name: Set up JDK 11
-        uses: actions/setup-java@v4
-        with:
-          java-version: "11"
-          distribution: "temurin"
+      # - name: Set up JDK 11
+      #   uses: actions/setup-java@v4
+      #   with:
+      #     java-version: "11"
+      #     distribution: "temurin"
 
-      - name: Set up Go 1.18
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.18"
+      # - name: Set up Go 1.18
+      #   uses: actions/setup-go@v5
+      #   with:
+      #     go-version: "1.18"
 
       - name: Install yq
         run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          yq --version
+          # Check if yq is already installed
+          if command -v yq &> /dev/null; then
+            echo "yq is already installed"
+            yq --version
+          else
+            echo "Installing yq..."
+            ARCH=$(uname -m)
+            case $ARCH in
+              x86_64)
+                YQ_ARCH="amd64"
+                ;;
+              aarch64|arm64)
+                YQ_ARCH="arm64"
+                ;;
+              *)
+                echo "Unsupported architecture: $ARCH"
+                exit 1
+                ;;
+            esac
+            
+            sudo wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${YQ_ARCH}"
+            sudo chmod +x /usr/local/bin/yq
+            yq --version
+          fi
 
-      - name: Install kind
-        run: |
-          # Download to /tmp to avoid conflict with kind directory in repo
-          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
-          chmod +x /tmp/kind
-          sudo mv /tmp/kind /usr/local/bin/kind
-          kind --version
+      # - name: Install kind
+      #   run: |
+      #     # Download to /tmp to avoid conflict with kind directory in repo
+      #     curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+      #     chmod +x /tmp/kind
+      #     sudo mv /tmp/kind /usr/local/bin/kind
+      #     kind --version
 
-      - name: Install kubectl
-        run: |
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/kubectl
-          kubectl version --client
+      # - name: Install kubectl
+      #   run: |
+      #     curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+      #     chmod +x kubectl
+      #     sudo mv kubectl /usr/local/bin/kubectl
+      #     kubectl version --client
 
-      - name: Install Helm
-        run: |
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          helm version
+      # - name: Install Helm
+      #   run: |
+      #     curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      #     helm version
 
       - name: Cache Darwin dependencies
         uses: actions/cache@v4
