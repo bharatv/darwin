@@ -406,12 +406,11 @@ jobs:
     name: MLflow Integration Test with Kubernetes
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 60
-    if: github.event_name == 'workflow_dispatch' && inputs.run_integration_test == true || github.event_name != 'workflow_dispatch'
     defaults:
       run:
         working-directory: .
     env:
-      KUBECONFIG: ./kind/config/kindkubeconfig.yaml
+      KUBECONFIG: ${{ github.workspace }}/kind/config/kindkubeconfig.yaml
     steps:
       - name: Cleanup workspace before checkout
         run: |
@@ -523,6 +522,10 @@ jobs:
 
       - name: Deploy Darwin platform
         run: |
+          # Export KUBECONFIG to GitHub environment for subsequent steps
+          export KUBECONFIG="${{ github.workspace }}/kind/config/kindkubeconfig.yaml"
+          echo "KUBECONFIG=${KUBECONFIG}" >> $GITHUB_ENV
+
           bash ./start.sh
           echo "Listing all pods in all namespaces:"
           kubectl get pods --all-namespaces
@@ -540,19 +543,19 @@ jobs:
 
           # Wait for darwin-mlflow (MLflow backend)
           echo "Checking darwin-mlflow (MLflow backend)..."
-          kubectl wait --for=condition=ready pod -l app=mlflow-lib -n darwin --timeout=300s || {
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=mlflow-lib -n darwin --timeout=300s || {
             echo "ERROR: darwin-mlflow pods failed to become ready"
-            kubectl get pods -n darwin -l app=mlflow-lib
-            kubectl describe pods -n darwin -l app=mlflow-lib
+            kubectl get pods -n darwin -l app.kubernetes.io/component=mlflow-lib
+            kubectl describe pods -n darwin -l app.kubernetes.io/component=mlflow-lib
             exit 1
           }
 
           # Wait for darwin-mlflow-app (FastAPI app layer)
           echo "Checking darwin-mlflow-app (FastAPI app layer)..."
-          kubectl wait --for=condition=ready pod -l app=mlflow-app -n darwin --timeout=300s || {
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=mlflow-app -n darwin --timeout=300s || {
             echo "ERROR: darwin-mlflow-app pods failed to become ready"
-            kubectl get pods -n darwin -l app=mlflow-app
-            kubectl describe pods -n darwin -l app=mlflow-app
+            kubectl get pods -n darwin -l app.kubernetes.io/component=mlflow-app
+            kubectl describe pods -n darwin -l app.kubernetes.io/component=mlflow-app
             exit 1
           }
 
