@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, TypeVar, Any, Literal
 from urllib.parse import urljoin
 
+import aiomysql
 import pytz
 from workflow_core.models.dao_response import DaoResponse
 from workflow_core.models.identifier import Identifier
@@ -24,7 +25,7 @@ from workflow_core.constants.constants import (
 )
 from workflow_core.constants.constants import auth, SLACK_TOKEN, HTML
 from workflow_core.dao.Airflow_dao import AirflowDao
-from workflow_core.dao.darwin_workflow_dao import darwin_worflow_conn
+from workflow_core.dao.darwin_workflow_dao import DarwinWorkflowConn
 from workflow_core.dao.elasticsearch_dao import ElasticSearchConnection, RecentlyVisitedConnection, \
     WorkflowHistoryElasticSearchConnection
 from workflow_core.dao.job_clusters_es_dao import JobClusElasticSearchConnection
@@ -102,6 +103,9 @@ I = TypeVar('I', bound=Identifier)
 Response = DaoResponse[D]
 
 
+# TODO: This class is ~3500 lines - split into smaller focused services (WorkflowService, RunService, TaskService, ClusterService)
+# TODO: Dual storage in Elasticsearch + MySQL creates consistency issues - consider single source of truth
+# TODO: V1/V2/V3 implementations coexist with significant duplication - plan deprecation path for older versions. Or they can be in a different fils 
 class WorkflowCoreImpl(WorkflowCoreInterface):
     def __init__(self, env: str):
         self.env = env
@@ -114,7 +118,7 @@ class WorkflowCoreImpl(WorkflowCoreInterface):
         self.airflow = AirflowApi(env)
         self.compute = ComputeApi(env)
         self.airflow_dao = AirflowDao(env)
-        self.darwin_workflow_dao = darwin_worflow_conn(env)
+        self.darwin_workflow_dao = DarwinWorkflowConn(env)
         self.logger = get_logger(__name__)
         self._config = Config(self.env)
         self.AIRFLOW_URL = self._config.get_airflow_url
@@ -127,6 +131,7 @@ class WorkflowCoreImpl(WorkflowCoreInterface):
         self.v3_runs_impl = WorkflowRunV3Impl()
         self.v3_tr_service = TaskRunService()
 
+    # TODO: find_workflow_id and find_workflow_id_async are identical except async keyword - consolidate
     def find_workflow_id(self, workflow_name: str):
         find_resp = self.__find_workflow_by_name(workflow_name)
         if find_resp is None or find_resp.data is None or len(find_resp.data) == 0:
@@ -139,6 +144,8 @@ class WorkflowCoreImpl(WorkflowCoreInterface):
             raise WorkflowNotFound(f"Workflow with name {workflow_name} not found")
         return WorkflowIdResponse(workflow_id=find_resp.data[0].workflow_id)
 
+    # TODO: Hardcoded 'Asia/Kolkata' timezone - should use workflow's configured timezone
+    # TODO: Date validation methods exist in both workflow_core_impl.py and validators.py - consolidate
     def check_if_end_date_has_passed(self, end_date: str):
         if end_date == "" or end_date is None:
             return False
@@ -209,6 +216,58 @@ class WorkflowCoreImpl(WorkflowCoreInterface):
         except Exception as e:
             self.logger.warning(f"Health check error: {e}")
             return "OK", "False"
+
+    async def deep_healthcheck(self) -> dict:
+        """
+        Simple deep healthcheck for key dependencies.
+        Returns a small, structured dict suitable to return directly from the API.
+        """
+        def ok() -> dict:
+            return {"status": "SUCCESS", "message": "OK"}
+
+        def fail(err: Exception) -> dict:
+            return {"status": "FAILURE", "message": str(err)}
+
+        data: dict = {}
+
+        # Elasticsearch
+        try:
+            _, es_health_str = self.health_check_core()  # ("OK", "True"/"False")
+            data["elasticsearch"] = ok() if str(es_health_str).lower() == "true" else {"status": "FAILURE", "message": "Unhealthy"}
+        except Exception as e:
+            data["elasticsearch"] = fail(e)
+
+        # Workflow DB
+        try:
+            cfg = getattr(self.darwin_workflow_dao, "workflow_config", None) or {}
+            conn = await aiomysql.connect(
+                host=cfg.get("host", "localhost"),
+                port=int(cfg.get("port", 3306)),
+                user=cfg.get("username", "root"),
+                password=cfg.get("password", "root"),
+                db=cfg.get("database", "darwin_workflow"),
+            )
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT 1")
+                    await cur.fetchone()
+            finally:
+                conn.close()
+                await conn.wait_closed()
+            data["workflow_db"] = ok()
+        except Exception as e:
+            data["workflow_db"] = fail(e)
+
+        # Airflow DB (optional)
+        try:
+            await self.airflow_dao.initialize()
+            await self.airflow_dao._mysql_dao.healthcheck()  # simple SELECT 1
+            data["airflow_db"] = ok()
+        except Exception as e:
+            data["airflow_db"] = fail(e)
+
+        overall = "SUCCESS" if all(v.get("status") == "SUCCESS" for v in data.values()) else "DEGRADED"
+        return {"status": overall, "message": "OK", "data": data}
 
     async def initialize_db(self):
         await self.airflow_dao.initialize()
@@ -366,6 +425,8 @@ class WorkflowCoreImpl(WorkflowCoreInterface):
         self._track_read_workflow(workflow_id=workflow_id, user_id=user_id)
         return data
 
+    # TODO: _sync_es_and_airflow, _sync_es_and_airflow_v2, _sync_es_and_airflow_by_runid have overlapping logic - refactor into single method with options
+    # TODO: Silent failures possible if Airflow is unreachable - add explicit error handling
     def _sync_es_and_airflow_by_runid(self, workflow_name=None, workflow_id=None, run_id=None):
         """Synchronizes workflow data between Elasticsearch and Airflow based on run ID."""
 

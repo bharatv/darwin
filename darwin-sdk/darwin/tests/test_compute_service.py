@@ -16,7 +16,11 @@ def test_cluster_metadata_structure_response(mock_compute_service, mock_cluster_
 
 
 @responses.activate
-@pytest.mark.parametrize("mock_cluster_response", ["compute_response_with_unknown_cluster.json"], indirect=True)
+@pytest.mark.parametrize(
+    "mock_cluster_response",
+    ["compute_response_with_unknown_cluster.json"],
+    indirect=True,
+)
 def test_compute_service_raises_custom_exception(mock_compute_service, mock_cluster_response):
     with pytest.raises(UnableToFetchComputeMetadataError, match="Unable to fetch compute metadata"):
         mock_compute_service.get_compute_metadata()
@@ -30,7 +34,11 @@ def test_is_ondemand_worker_worker_group_attached(mock_compute_service, mock_clu
 
 
 @responses.activate
-@pytest.mark.parametrize("mock_cluster_response", ["compute_response_without_ondemand_node.json"], indirect=True)
+@pytest.mark.parametrize(
+    "mock_cluster_response",
+    ["compute_response_without_ondemand_node.json"],
+    indirect=True,
+)
 def test_is_ondemand_worker_worker_group_not_attached(mock_compute_service, mock_cluster_response):
     metadata: ClusterResponse = mock_compute_service.get_compute_metadata()
     assert metadata.data.has_ondemand_worker_group is False

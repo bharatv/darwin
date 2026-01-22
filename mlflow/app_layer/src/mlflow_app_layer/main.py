@@ -17,12 +17,13 @@
 # Databricks, Inc. Modifications include custom authentication, authorization,
 # and integration with the Darwin platform.
 
-import os
-from typing import Union
+from typing import Annotated
 
 from fastapi import FastAPI, Request, Header
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from pydantic import EmailStr
 from ddtrace import patch
+import os
 
 from mlflow_app_layer.controllers.experiment import (
     create_experiment_controller,
@@ -58,7 +59,8 @@ from mlflow_app_layer.service.mlflow import MLFlow
 from mlflow_app_layer.util.s3_utils import initialize_s3_bucket
 
 patch(fastapi=True)
-app = FastAPI()
+root_path = os.environ.get("ROOT_PATH", "")
+app = FastAPI(root_path=root_path)
 
 config = Config()
 mlflow_service = MLFlow()
@@ -67,9 +69,13 @@ mlflow_service = MLFlow()
 initialize_s3_bucket()
 
 
-@app.get("/health")
+# Type alias for validated email header
+ValidatedEmail = Annotated[EmailStr, Header()]
+
+
+@app.get("/healthcheck")
 def health():
-    return {"status": "SUCCESS"}
+    return {"status": "SUCCESS", "message": "OK"}
 
 
 @app.get("/experiments", response_class=HTMLResponse)
@@ -122,7 +128,7 @@ async def get_artifacts_path(request: Request, path: str):
 
 @app.get("/v1/experiment/{experiment_id}")
 async def get_experiment(
-    experiment_id: str, email: Union[str, None] = Header(default=None)
+    experiment_id: str, email: ValidatedEmail
 ):
     return await get_experiment_controller(experiment_id, config, email, mlflow_service)
 
@@ -134,7 +140,7 @@ async def create_user(request: Request):
 
 @app.post("/v1/experiment")
 async def create_experiment(
-    request: CreateExperimentRequest, email: Union[str, None] = Header(default=None)
+    request: CreateExperimentRequest, email: ValidatedEmail
 ):
     return await create_experiment_controller(request, config, email)
 
@@ -143,14 +149,14 @@ async def create_experiment(
 async def update_experiment(
     experiment_id: str,
     request: UpdateExperimentRequest,
-    email: Union[str, None] = Header(default=None),
+    email: ValidatedEmail,
 ):
     return await update_experiment_controller(experiment_id, request, config, email)
 
 
 @app.delete("/v1/experiment/{experiment_id}")
 async def delete_experiment(
-    experiment_id: str, email: Union[str, None] = Header(default=None)
+    experiment_id: str, email: ValidatedEmail
 ):
     return await delete_experiment_controller(
         experiment_id, config, email, mlflow_service
@@ -159,14 +165,14 @@ async def delete_experiment(
 
 @app.get("/v1/models")
 async def search_models(
-    request: Request, email: Union[str, None] = Header(default=None)
+    request: Request, email: ValidatedEmail
 ):
     return await search_models_controller(request, config, email)
 
 
 @app.get("/v1/experiment/{experiment_id}/run/{run_id}")
 async def get_run(
-    experiment_id: str, run_id: str, email: Union[str, None] = Header(default=None)
+    experiment_id: str, run_id: str, email: ValidatedEmail
 ):
     return await get_run_controller(
         experiment_id, run_id, config, email, mlflow_service
@@ -175,7 +181,7 @@ async def get_run(
 
 @app.delete("/v1/experiment/{experiment_id}/run/{run_id}")
 async def delete_run(
-    experiment_id: str, run_id: str, email: Union[str, None] = Header(default=None)
+    experiment_id: str, run_id: str, email: ValidatedEmail
 ):
     return await delete_run_controller(
         experiment_id, run_id, config, email, mlflow_service
@@ -186,7 +192,7 @@ async def delete_run(
 async def create_run(
     experiment_id: str,
     request: CreateRunRequest,
-    email: Union[str, None] = Header(default=None),
+    email: ValidatedEmail,
 ):
     return await create_run_controller(
         experiment_id, request, config, email, mlflow_service
@@ -197,6 +203,6 @@ async def create_run(
 async def log_data(
     run_id: str,
     request: LogRunDataRequest,
-    email: Union[str, None] = Header(default=None),
+    email: ValidatedEmail,
 ):
     return await log_run_data_controller(run_id, request, email, config)

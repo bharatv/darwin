@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# Get the project root directory (same as start-cluster.sh does)
+# This ensures config.env is always written to the same location
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+CONFIG_ENV="$PROJECT_ROOT/.setup/config.env"
+
 # Check for init configuration
 ENABLED_SERVICES_FILE=".setup/enabled-services.yaml"
 if [ ! -f "$ENABLED_SERVICES_FILE" ]; then
@@ -10,27 +16,94 @@ if [ ! -f "$ENABLED_SERVICES_FILE" ]; then
 fi
 echo "✅ Found configuration: $ENABLED_SERVICES_FILE"
 
-# Mark local config files as assume-unchanged to prevent accidental commits
-git update-index --assume-unchanged config.env 2>/dev/null || true
-git update-index --assume-unchanged kind/config/kindkubeconfig.yaml 2>/dev/null || true
-
 # Parse command line arguments
 AUTO_YES=false
+FORCE_CLEAN=false
+DEV_MODE=false        # Developer mode flag
+SNAPSHOT_VERSION=""   # Snapshot version (used with dev mode)
 while [ $# -gt 0 ]; do
   case "$1" in
     -y|--yes)
       AUTO_YES=true
       shift
       ;;
+    -c|--clean)
+      FORCE_CLEAN=true
+      shift
+      ;;
+    -d|--dev)
+      DEV_MODE=true
+      shift
+      ;;
+    --snapshot)
+      if [ -z "$2" ] || [[ "$2" == -* ]]; then
+        echo "❌ --snapshot requires a version argument"
+        echo "   Example: $0 -d --snapshot snapshot-abc12345"
+        exit 1
+      fi
+      SNAPSHOT_VERSION="$2"
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: $0 [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  -y, --yes          Auto-answer 'yes' to all prompts (non-interactive mode)"
+      echo "  -c, --clean        Force clean setup (deletes existing cluster and data)"
+      echo "  -d, --dev          Developer mode: build images locally or pull snapshots"
+      echo "  --snapshot VERSION Pull snapshot images (requires -d/--dev flag)"
+      echo "                     Example: --snapshot snapshot-abc12345"
+      echo "  -h, --help         Show this help message"
+      echo ""
+      echo "Examples:"
+      echo "  $0                           # Pull stable release images (default)"
+      echo "  $0 -d                        # Build images locally (dev mode)"
+      echo "  $0 -d --snapshot snapshot-abc12345  # Pull snapshot images for testing"
+      echo "  $0 -y                        # Non-interactive, pull release images"
+      echo "  $0 -y -c -d                  # Non-interactive, clean install, build locally"
+      exit 0
+      ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [-y|--yes]"
+      echo "Usage: $0 [-y|--yes] [-c|--clean] [-d|--dev] [--snapshot VERSION] [-h|--help]"
       exit 1
       ;;
   esac
 done
 
-echo '' > config.env
+# Determine IMAGE_MODE based on flags
+if [ "$DEV_MODE" = "true" ]; then
+  if [ -n "$SNAPSHOT_VERSION" ]; then
+    IMAGE_MODE="snapshot"
+  else
+    IMAGE_MODE="build"
+  fi
+else
+  if [ -n "$SNAPSHOT_VERSION" ]; then
+    echo "❌ --snapshot requires --dev (-d) flag"
+    echo "   Example: $0 -d --snapshot snapshot-abc12345"
+    exit 1
+  fi
+  IMAGE_MODE="release"
+fi
+
+echo '' > "$CONFIG_ENV"
+
+# Initialize arrays for tracking successes and failures
+declare -a SUCCESSFUL_IMAGES=()
+declare -a FAILED_IMAGES=()
+
+# Display selected image mode
+echo ""
+echo "🖼️  Image Mode: $IMAGE_MODE"
+if [ "$IMAGE_MODE" = "snapshot" ]; then
+  echo "   Snapshot Version: $SNAPSHOT_VERSION"
+elif [ "$IMAGE_MODE" = "release" ]; then
+  echo "   Will pull stable release images from darwinhq/"
+elif [ "$IMAGE_MODE" = "build" ]; then
+  echo "   Will build images locally"
+fi
+echo ""
 
 extract_max_supported_api_version() {
     printf "%s\n" "$1" | sed -n 's/.*Maximum supported API version is \([0-9.]*\).*/\1/p' | head -n 1
@@ -72,7 +145,37 @@ ensure_docker_api_version() {
 ENV=local
 ENV_CREATION=false
 
+# Set default KUBECONFIG path
+KUBECONFIG=./.setup/kindkubeconfig.yaml
+
 ensure_docker_api_version
+
+# Function to clean up existing Kind cluster and shared storage
+clean_kind_setup() {
+    echo "🧹 Cleaning up existing Kind setup..."
+    
+    # Delete Kind cluster if it exists
+    if kind get clusters 2>/dev/null | grep -q "^kind$"; then
+        echo "🛑 Deleting existing kind cluster..."
+        kind delete cluster --name kind
+        echo "✅ Kind cluster deleted"
+    fi
+    
+    # Delete shared-storage folder
+    if [ -d "kind/shared-storage" ]; then
+        echo "🧹 Deleting kind/shared-storage/..."
+        rm -rf kind/shared-storage
+        echo "✅ Shared storage deleted"
+    fi
+    
+    # Delete kubeconfig
+    if [ -f ".setup/kindkubeconfig.yaml" ]; then
+        rm -f .setup/kindkubeconfig.yaml
+        echo "✅ Kubeconfig deleted"
+    fi
+    
+    echo "✅ Clean up complete"
+}
 
 # Check if ENV environment variable equals "local"
 if [ "$ENV" = "local" ]; then
@@ -86,20 +189,37 @@ if [ "$ENV" = "local" ]; then
     fi
     if [[ $REPLY =~ ^[Yy]$ ]]
     then
-        echo "\nStarting kind cluster..."
+        # Ask if user wants a clean setup (or force clean if --clean flag passed)
+        if [ "$FORCE_CLEAN" = "true" ]; then
+            CLEAN_REPLY="y"
+            echo "🧹 Clean setup requested via --clean flag"
+        elif [ "$AUTO_YES" = "true" ]; then
+            CLEAN_REPLY="n"
+            echo "Auto-answering 'no' to clean setup (use --clean flag to force clean)"
+        else
+            echo ""
+            read -p "Do you want a clean setup? (deletes existing cluster and data) (y/n) " -n 1 -r CLEAN_REPLY
+        fi
+        if [[ $CLEAN_REPLY =~ ^[Yy]$ ]]; then
+            echo ""
+            clean_kind_setup
+        fi
+        
+        echo -e "\n🚀 Starting kind cluster..."
 
         envsubst < ./kind/kind-config.yaml > ./kind/kind-config-tmp.yaml
+        
         export CLUSTER_NAME=kind
         export KIND_CONFIG=./kind/kind-config-tmp.yaml
-        export KUBECONFIG=./kind/config/kindkubeconfig.yaml
+        export KUBECONFIG=./.setup/kindkubeconfig.yaml
         
         sh ./kind/start-cluster.sh
         ENV_CREATION=true
         
         rm ./kind/kind-config-tmp.yaml
     else
-        echo "\nSkipping kind cluster setup"
-        echo "DOCKER_REGISTRY=docker.io" >> config.env
+        echo -e "\n🔄 Skipping kind cluster setup"
+        echo "DOCKER_REGISTRY=docker.io" >> "$CONFIG_ENV"
     fi
 else
     echo "ENV is not set to 'local' (current value: '$ENV'), skipping local k8s cluster setup"
@@ -107,11 +227,12 @@ fi
 
 # check if kube config file exists and is reachable
 if [ ! -f "$KUBECONFIG" ]; then
-    echo "KUBECONFIG file does not exist"
+    echo "❌ KUBECONFIG file does not exist at $KUBECONFIG"
+    echo "   Cluster may not have been created. Please ensure cluster setup completed successfully."
     exit 1
 else
-    echo "KUBECONFIG=$KUBECONFIG" >> config.env
-    source config.env
+    echo "KUBECONFIG=$KUBECONFIG" >> "$CONFIG_ENV"
+    source "$CONFIG_ENV"
 fi
 
 if kubectl version >/dev/null 2>&1; then
@@ -120,19 +241,34 @@ else
   echo "❌ Cluster is not reachable"
 fi
 
-# Ask if user wants a clean build
-if [ "$AUTO_YES" = "true" ]; then
-    REPLY="y"
-    echo "Auto-answering 'yes' to clean build"
+# Ask if user wants to proceed with build/pull
+if [ "$IMAGE_MODE" = "release" ] || [ "$IMAGE_MODE" = "snapshot" ]; then
+    # In pull mode, always proceed
+    if [ "$AUTO_YES" = "true" ]; then
+        echo "Auto-proceeding with image pull in $IMAGE_MODE mode"
+    else
+        read -p "Do you want to pull images from darwinhq/? (y/n) " -n 1 -r
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "\n🔄 Skipping image pull. Exiting."
+            exit 0
+        fi
+    fi
+    echo
 else
-    read -p "Do you want a clean build? (y/n) " -n 1 -r
+    # In build mode, ask as before
+    if [ "$AUTO_YES" = "true" ]; then
+        REPLY="y"
+        echo "Auto-answering 'yes' to clean build"
+    else
+        read -p "Do you want a clean build? (y/n) " -n 1 -r
+    fi
+    if [[ ! $REPLY =~ ^[Yy]$ ]]
+    then
+        echo -e "\n🔄 Skipping build. Exiting."
+        exit 0
+    fi
+    echo
 fi
-if [[ ! $REPLY =~ ^[Yy]$ ]]
-then
-    echo "\nSkipping build. Exiting."
-    exit 0
-fi
-echo
 
 # Install yq if not available
 if ! command -v yq >/dev/null 2>&1; then
@@ -175,17 +311,67 @@ else
   echo "✅ yq is already available"
 fi
 
-pushd deployer/images/java-11
-sh build.sh
-popd
+# Set remote registry for pull modes
+REMOTE_REGISTRY="docker.io/darwinhq"
 
-pushd deployer/images/python-3.9.7
-sh build.sh
-popd
+if [ "$IMAGE_MODE" = "release" ] || [ "$IMAGE_MODE" = "snapshot" ]; then
+  # Pull base images from remote
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "                    PULLING BASE IMAGES"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  
+  BASE_IMAGES=("java:11-maven-bookworm-slim" "python:3.9.7-pip-bookworm-slim" "golang:1.18-bookworm-slim")
+  BASE_IMAGE_FAILED=false
+  for base_img in "${BASE_IMAGES[@]}"; do
+    echo ">>> Pulling $REMOTE_REGISTRY/$base_img..."
+    if docker pull "$REMOTE_REGISTRY/$base_img"; then
+      docker tag "$REMOTE_REGISTRY/$base_img" "darwin/$base_img"
+      docker tag "$REMOTE_REGISTRY/$base_img" "$DOCKER_REGISTRY/darwin/$base_img"
+      docker push "$DOCKER_REGISTRY/darwin/$base_img"
+      echo "✅ Base image ready: darwin/$base_img"
+      SUCCESSFUL_IMAGES+=("Base: darwin/$base_img")
+    else
+      echo "❌ Failed to pull base image: $REMOTE_REGISTRY/$base_img"
+      FAILED_IMAGES+=("Base: darwin/$base_img (pull failed)")
+      BASE_IMAGE_FAILED=true
+    fi
+  done
+  
+  # Base images are critical - if any failed, show error and exit
+  if [ "$BASE_IMAGE_FAILED" = "true" ]; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "❌ Base image pull failed. Base images are required for the platform."
+    echo ""
+    echo "Options:"
+    echo "  1. Use build mode: ./setup.sh -d"
+    echo "  2. Ensure base images are published to Docker Hub"
+    echo "     Check .github/workflows/build-base-images.yml"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    exit 1
+  fi
+else
+  # Build base images locally
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "                    BUILDING BASE IMAGES"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  
+  pushd deployer/images/java-11
+  sh build.sh
+  popd
 
-pushd deployer/images/golang-1.18
-sh build.sh
-popd
+  pushd deployer/images/python-3.9.7
+  sh build.sh
+  popd
+
+  pushd deployer/images/golang-1.18
+  sh build.sh
+  popd
+fi
 
 # Path to your YAML files
 YAML_FILE="services.yaml"
@@ -193,14 +379,61 @@ ENABLED_FILE=".setup/enabled-services.yaml"
 
 dynamic_build_args=""
 
+# Function to pull application image from remote registry
+pull_application_image() {
+  local application=$1
+  local remote_registry=$2
+  local image_tag=$3
+  local local_registry=$4
+  
+  local remote_image="${remote_registry}/${application}:${image_tag}"
+  local local_image="${local_registry}/${application}:latest"
+  
+  echo ">>> Pulling $remote_image..."
+  if docker pull "$remote_image"; then
+    echo "    ✅ Pulled $remote_image"
+    
+    # Tag for local registry
+    echo "    Tagging as $local_image..."
+    docker tag "$remote_image" "$local_image"
+    docker tag "$remote_image" "${application}:latest"
+    
+    # Push to local registry
+    echo "    Pushing to local registry..."
+    if docker push "$local_image"; then
+      echo "    ✅ Pushed $local_image"
+      return 0
+    else
+      echo "    ❌ Failed to push $local_image"
+      return 1
+    fi
+  else
+    echo "    ⚠️  Failed to pull $remote_image (may not exist yet)"
+    return 1
+  fi
+}
+
 # ============================================================================
-# BUILD APPLICATIONS
+# BUILD OR PULL APPLICATIONS
 # ============================================================================
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "                    BUILDING APPLICATIONS"
+if [ "$IMAGE_MODE" = "build" ]; then
+  echo "                    BUILDING APPLICATIONS"
+else
+  echo "                    PULLING APPLICATIONS"
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
+
+# Determine image tag based on mode
+if [ "$IMAGE_MODE" = "release" ]; then
+  IMAGE_TAG="latest"
+elif [ "$IMAGE_MODE" = "snapshot" ]; then
+  IMAGE_TAG="$SNAPSHOT_VERSION"
+else
+  IMAGE_TAG="latest"  # For local builds
+fi
 
 # Loop through YAML using array approach - check enabled status from .setup/enabled-services.yaml
 app_count=$(yq eval '.applications | length' "$YAML_FILE")
@@ -216,34 +449,54 @@ while [ $i -lt $app_count ]; do
     continue
   fi
 
-  base_path=$(yq eval ".applications[$i].base-path" "$YAML_FILE")
-  path=$(yq eval ".applications[$i].path" "$YAML_FILE")
-  base_image=$(yq eval ".applications[$i].base-image" "$YAML_FILE")
-  # create key value pair of envs name and value
-  extra_env_vars=$(yq eval ".applications[$i].env" "$YAML_FILE")
-  # Parse the YAML env array into key=value pairs using yq
-  env_count=$(yq eval ".applications[$i].env | length" "$YAML_FILE")
-  j=0
-  while [ $j -lt $env_count ]; do
-    key=$(yq eval ".applications[$i].env[$j].name" "$YAML_FILE")
-    value=$(yq eval ".applications[$i].env[$j].value" "$YAML_FILE")
-    dynamic_build_args="$dynamic_build_args|$key=$value"
-    j=$((j + 1))
-  done
+  if [ "$IMAGE_MODE" = "release" ] || [ "$IMAGE_MODE" = "snapshot" ]; then
+    # Pull from remote registry
+    if pull_application_image "$application" "$REMOTE_REGISTRY" "$IMAGE_TAG" "$DOCKER_REGISTRY"; then
+      SUCCESSFUL_IMAGES+=("App: $application")
+    else
+      FAILED_IMAGES+=("App: $application (pull failed)")
+    fi
+  else
+    # Build locally (existing code)
+    base_path=$(yq eval ".applications[$i].base-path" "$YAML_FILE")
+    path=$(yq eval ".applications[$i].path" "$YAML_FILE")
+    base_image=$(yq eval ".applications[$i].base-image" "$YAML_FILE")
+    # create key value pair of envs name and value
+    extra_env_vars=$(yq eval ".applications[$i].env" "$YAML_FILE")
+    # Parse the YAML env array into key=value pairs using yq
+    env_count=$(yq eval ".applications[$i].env | length" "$YAML_FILE")
+    j=0
+    dynamic_build_args=""
+    while [ $j -lt $env_count ]; do
+      key=$(yq eval ".applications[$i].env[$j].name" "$YAML_FILE")
+      value=$(yq eval ".applications[$i].env[$j].value" "$YAML_FILE")
+      dynamic_build_args="$dynamic_build_args|$key=$value"
+      j=$((j + 1))
+    done
 
-  echo ">>> Building image for $application..."
-  sh deployer/scripts/image-builder.sh -a "$application" -t "$base_path" -p "$path" -e "$base_image" -r "$DOCKER_REGISTRY" -B "$dynamic_build_args"
+    echo ">>> Building image for $application..."
+    if sh deployer/scripts/image-builder.sh -a "$application" -t "$base_path" -p "$path" -e "$base_image" -r "$DOCKER_REGISTRY" -B "$dynamic_build_args"; then
+      SUCCESSFUL_IMAGES+=("App: $application")
+      echo ">>> Completed processing $application"
+    else
+      FAILED_IMAGES+=("App: $application (build failed)")
+      echo ">>> Failed to build $application"
+    fi
+  fi
   
-  echo ">>> Completed processing $application"
   i=$((i + 1))
 done
 
 # ============================================================================
-# BUILD RAY IMAGES
+# BUILD OR PULL RAY IMAGES
 # ============================================================================
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "                    BUILDING RAY IMAGES"
+if [ "$IMAGE_MODE" = "build" ]; then
+  echo "                    BUILDING RAY IMAGES"
+else
+  echo "                    PULLING RAY IMAGES"
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -260,18 +513,46 @@ while [ $i -lt $ray_image_count ]; do
     continue
   fi
 
-  dockerfile_path=$(yq eval ".ray-images[$i].dockerfile-path" "$YAML_FILE")
-  echo ">>> Building ray image $image_name..."
-  sh deployer/scripts/ray-image-builder.sh -n "$image_name" -p "$dockerfile_path" -r "$DOCKER_REGISTRY"
+  if [ "$IMAGE_MODE" = "release" ] || [ "$IMAGE_MODE" = "snapshot" ]; then
+    # For ray images, use the image name directly (e.g., ray:2.37.0)
+    remote_image="${REMOTE_REGISTRY}/${image_name}"
+    local_image="${DOCKER_REGISTRY}/${image_name}"
+    
+    echo ">>> Pulling ray image $remote_image..."
+    if docker pull "$remote_image"; then
+      echo "    ✅ Pulled $remote_image"
+      docker tag "$remote_image" "$local_image"
+      docker push "$local_image"
+      echo "    ✅ Ready: $local_image"
+      SUCCESSFUL_IMAGES+=("Ray: $image_name")
+    else
+      echo "    ⚠️  Ray image not available in remote registry, skipping..."
+      FAILED_IMAGES+=("Ray: $image_name (pull failed)")
+    fi
+  else
+    # Build locally
+    dockerfile_path=$(yq eval ".ray-images[$i].dockerfile-path" "$YAML_FILE")
+    echo ">>> Building ray image $image_name..."
+    if sh deployer/scripts/ray-image-builder.sh -n "$image_name" -p "$dockerfile_path" -r "$DOCKER_REGISTRY"; then
+      SUCCESSFUL_IMAGES+=("Ray: $image_name")
+    else
+      FAILED_IMAGES+=("Ray: $image_name (build failed)")
+    fi
+  fi
+  
   i=$((i + 1))
 done
 
 # ============================================================================
-# BUILD SERVE RUNTIME IMAGES
+# BUILD OR PULL SERVE RUNTIME IMAGES
 # ============================================================================
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "                  BUILDING SERVE RUNTIME IMAGES"
+if [ "$IMAGE_MODE" = "build" ]; then
+  echo "                  BUILDING SERVE RUNTIME IMAGES"
+else
+  echo "                  PULLING SERVE RUNTIME IMAGES"
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -288,18 +569,46 @@ while [ $i -lt $serve_image_count ]; do
     continue
   fi
 
-  dockerfile_path=$(yq eval ".serve-images[$i].dockerfile-path" "$YAML_FILE")
-  echo ">>> Building serve runtime image: $image_name"
-  sh deployer/scripts/ray-image-builder.sh -n "$image_name" -p "$dockerfile_path" -r "$DOCKER_REGISTRY"
+  if [ "$IMAGE_MODE" = "release" ] || [ "$IMAGE_MODE" = "snapshot" ]; then
+    # Pull serve images from remote
+    remote_image="${REMOTE_REGISTRY}/${image_name}"
+    local_image="${DOCKER_REGISTRY}/${image_name}"
+    
+    echo ">>> Pulling serve runtime image: $remote_image"
+    if docker pull "$remote_image"; then
+      echo "    ✅ Pulled $remote_image"
+      docker tag "$remote_image" "$local_image"
+      docker push "$local_image"
+      echo "    ✅ Ready: $local_image"
+      SUCCESSFUL_IMAGES+=("Serve: $image_name")
+    else
+      echo "    ⚠️  Serve image not available in remote registry, skipping..."
+      FAILED_IMAGES+=("Serve: $image_name (pull failed)")
+    fi
+  else
+    # Build locally
+    dockerfile_path=$(yq eval ".serve-images[$i].dockerfile-path" "$YAML_FILE")
+    echo ">>> Building serve runtime image: $image_name"
+    if sh deployer/scripts/ray-image-builder.sh -n "$image_name" -p "$dockerfile_path" -r "$DOCKER_REGISTRY"; then
+      SUCCESSFUL_IMAGES+=("Serve: $image_name")
+    else
+      FAILED_IMAGES+=("Serve: $image_name (build failed)")
+    fi
+  fi
+  
   i=$((i + 1))
 done
 
 # ============================================================================
-# BUILD DARWIN SDK RUNTIME IMAGE
+# BUILD OR PULL DARWIN SDK RUNTIME IMAGE
 # ============================================================================
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "                 BUILDING DARWIN SDK RUNTIME"
+if [ "$IMAGE_MODE" = "build" ]; then
+  echo "                 BUILDING DARWIN SDK RUNTIME"
+else
+  echo "                 PULLING DARWIN SDK RUNTIME"
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -318,21 +627,46 @@ if [ "$sdk_enabled" = "true" ]; then
   # Extract tag from image name (e.g., ray:2.37.0-darwin-sdk -> 2.37.0-darwin-sdk)
   sdk_tag="${sdk_image#*:}"
   
-  echo ">>> Building Darwin SDK runtime image: $sdk_image"
-  echo "    Spark version: $sdk_spark_version"
-  echo "    Registry: $sdk_registry"
-  
-  # Check if runtime_builder.sh exists
-  if [ -f "darwin-sdk/runtime_builder.sh" ]; then
-    sh darwin-sdk/runtime_builder.sh \
-      --spark-version "$sdk_spark_version" \
-      --tag "$sdk_tag" \
-      --registry "$sdk_registry" \
-      --push
-    echo "✅ Darwin SDK runtime built and pushed: ${sdk_registry}/ray:${sdk_tag}"
+  if [ "$IMAGE_MODE" = "release" ] || [ "$IMAGE_MODE" = "snapshot" ]; then
+    # Pull Darwin SDK runtime from remote
+    remote_image="${REMOTE_REGISTRY}/${sdk_image}"
+    local_image="${sdk_registry}/${sdk_image}"
+    
+    echo ">>> Pulling Darwin SDK runtime image: $remote_image"
+    if docker pull "$remote_image"; then
+      echo "    ✅ Pulled $remote_image"
+      docker tag "$remote_image" "$local_image"
+      docker push "$local_image"
+      echo "    ✅ Ready: $local_image"
+      SUCCESSFUL_IMAGES+=("SDK: $sdk_image")
+    else
+      echo "    ⚠️  Darwin SDK runtime not available in remote registry, skipping..."
+      FAILED_IMAGES+=("SDK: $sdk_image (pull failed)")
+    fi
   else
-    echo "❌ darwin-sdk/runtime_builder.sh not found"
-    echo "   Skipping Darwin SDK runtime build"
+    # Build locally
+    echo ">>> Building Darwin SDK runtime image: $sdk_image"
+    echo "    Spark version: $sdk_spark_version"
+    echo "    Registry: $sdk_registry"
+    
+    # Check if runtime_builder.sh exists
+    if [ -f "darwin-sdk/runtime_builder.sh" ]; then
+      if bash darwin-sdk/runtime_builder.sh \
+        --spark-version "$sdk_spark_version" \
+        --tag "$sdk_tag" \
+        --registry "$sdk_registry" \
+        --push; then
+        echo "✅ Darwin SDK runtime built and pushed: ${sdk_registry}/ray:${sdk_tag}"
+        SUCCESSFUL_IMAGES+=("SDK: $sdk_image")
+      else
+        echo "❌ Darwin SDK runtime build failed"
+        FAILED_IMAGES+=("SDK: $sdk_image (build failed)")
+      fi
+    else
+      echo "❌ darwin-sdk/runtime_builder.sh not found"
+      echo "   Skipping Darwin SDK runtime build"
+      FAILED_IMAGES+=("SDK: $sdk_image (builder script not found)")
+    fi
   fi
 else
   echo "⏭️  Skipping Darwin SDK runtime (disabled)"
@@ -400,7 +734,11 @@ if [ "$datastore_count" != "0" ] && [ "$datastore_count" != "null" ]; then
       continue
     fi
 
-    push_datastore_image "$ds_name" "$ds_image" "$ds_tag"
+    if push_datastore_image "$ds_name" "$ds_image" "$ds_tag"; then
+      SUCCESSFUL_IMAGES+=("Datastore: $ds_name ($ds_image:$ds_tag)")
+    else
+      FAILED_IMAGES+=("Datastore: $ds_name ($ds_image:$ds_tag) (pull/push failed)")
+    fi
 
     i=$((i + 1))
   done
@@ -409,38 +747,51 @@ else
 fi
 
 # ============================================================================
-# BUILD AIRFLOW IMAGE (if airflow datastore is enabled)
+# BUILD OR PULL AIRFLOW IMAGE (if airflow datastore is enabled)
 # ============================================================================
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "                    BUILDING AIRFLOW IMAGE"
+if [ "$IMAGE_MODE" = "build" ]; then
+  echo "                    BUILDING AIRFLOW IMAGE"
+else
+  echo "                    PULLING AIRFLOW IMAGE"
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
 # Check if airflow is enabled
 airflow_enabled=$(yq eval '.datastores.airflow' "$ENABLED_FILE")
 if [ "$airflow_enabled" = "true" ]; then
-  echo ">>> Building darwin-airflow image..."
-  
-  # Build airflow image using existing script
-  if [ -f "darwin-workflow/build-airflow-image.sh" ]; then
-    cd darwin-workflow
-    bash build-airflow-image.sh || {
-      echo "❌ Failed to build darwin-airflow image"
-      exit 1
-    }
-    cd ..
+  if [ "$IMAGE_MODE" = "build" ]; then
+    echo ">>> Building darwin-airflow image..."
     
-    # Load into Kind cluster (required for imagePullPolicy: Never)
-    echo ">>> Loading darwin-airflow image into Kind cluster..."
-    kind load docker-image darwin-airflow:latest || {
-      echo "❌ Failed to load darwin-airflow image into Kind"
-      exit 1
-    }
-    echo "✅ darwin-airflow image built and loaded into Kind"
+    # Build airflow image using existing script
+    if [ -f "darwin-workflow/build-airflow-image.sh" ]; then
+      cd darwin-workflow
+      if bash build-airflow-image.sh; then
+        cd ..
+        
+        # Load into Kind cluster (required for imagePullPolicy: Never)
+        echo ">>> Loading darwin-airflow image into Kind cluster..."
+        if kind load docker-image darwin-airflow:latest; then
+          echo "✅ darwin-airflow image built and loaded into Kind"
+          SUCCESSFUL_IMAGES+=("Airflow: darwin-airflow")
+        else
+          echo "❌ Failed to load darwin-airflow image into Kind"
+          FAILED_IMAGES+=("Airflow: darwin-airflow (kind load failed)")
+        fi
+      else
+        cd ..
+        echo "❌ Failed to build darwin-airflow image"
+        FAILED_IMAGES+=("Airflow: darwin-airflow (build failed)")
+      fi
+    else
+      echo "❌ darwin-workflow/build-airflow-image.sh not found"
+      FAILED_IMAGES+=("Airflow: darwin-airflow (builder script not found)")
+    fi
   else
-    echo "❌ darwin-workflow/build-airflow-image.sh not found"
-    exit 1
+    echo "⚠️  Airflow image pull not yet supported - skipping"
+    echo "    Consider using -d flag if you need airflow"
   fi
 else
   echo "⏭️  Skipping darwin-airflow image (airflow datastore disabled)"
@@ -508,7 +859,11 @@ if [ "$operator_count" != "0" ] && [ "$operator_count" != "null" ]; then
       continue
     fi
 
-    push_operator_image "$op_name" "$op_image" "$op_tag"
+    if push_operator_image "$op_name" "$op_image" "$op_tag"; then
+      SUCCESSFUL_IMAGES+=("Operator: $op_name ($op_image:$op_tag)")
+    else
+      FAILED_IMAGES+=("Operator: $op_name ($op_image:$op_tag) (pull/push failed)")
+    fi
 
     i=$((i + 1))
   done
@@ -516,5 +871,140 @@ else
   echo "⚠️  No operators defined in services.yaml"
 fi
 
+# ============================================================================
+# SETUP DARWIN CLI
+# ============================================================================
 echo ""
-echo "✅ Setup completed!"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "                    SETTING UP DARWIN CLI"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Check if darwin-cli is enabled
+DARWIN_CLI_ENABLED=$(yq eval '.cli-tools.darwin-cli // false' "$ENABLED_FILE" 2>/dev/null || echo "false")
+
+if [ "$DARWIN_CLI_ENABLED" = "true" ]; then
+  DARWIN_CLI_PATH="darwin-cli"
+  if [ ! -d "$DARWIN_CLI_PATH" ]; then
+    echo "   ⚠️  darwin-cli directory not found at $DARWIN_CLI_PATH, skipping..."
+  else
+    VENV_PATH=".venv"
+    
+    # Check if python3.9 exists and is version 3.9.7+
+    if command -v python3.9 &> /dev/null; then
+      if python3.9 -c "import sys; exit(0 if sys.version_info >= (3, 9, 7) else 1)" 2>/dev/null; then
+        PYTHON_CMD="python3.9"
+        echo "   ✅ Found Python 3.9.7+"
+      else
+        echo "   ❌ python3.9 found but version < 3.9.7"
+        echo "   Install: sudo apt-get install python3.9  # Ubuntu/Debian"
+        echo "            brew install python@3.9         # macOS"
+        DARWIN_CLI_ENABLED="false"
+      fi
+    else
+      echo "   ❌ python3.9 not found (darwin-cli requires Python 3.9.7+)"
+      echo "   Install: sudo apt-get install python3.9  # Ubuntu/Debian"
+      echo "            brew install python@3.9         # macOS"
+      DARWIN_CLI_ENABLED="false"
+    fi
+  fi
+  
+  if [ "$DARWIN_CLI_ENABLED" = "true" ]; then
+  
+    # Create venv if it doesn't exist
+    if [ ! -d "$VENV_PATH" ]; then
+      echo "   Creating virtual environment with $PYTHON_CMD..."
+      if ! $PYTHON_CMD -m venv "$VENV_PATH"; then
+        echo "   ❌ Failed to create virtual environment"
+        FAILED_IMAGES+=("CLI: darwin-cli (venv creation failed)")
+        DARWIN_CLI_ENABLED="false"
+      fi
+    fi
+
+    # Install darwin-cli
+    echo "   Installing darwin-cli package..."
+    (
+      set -e
+      source "$VENV_PATH/bin/activate" && \
+      pip install --upgrade pip --quiet && \
+      cd "$DARWIN_CLI_PATH" && \
+      rm -rf dist/ build/ *.egg-info && \
+      python setup.py sdist && \
+      TARBALL=$(ls dist/*.tar.gz 2>/dev/null | head -1) && \
+      if [ -z "$TARBALL" ]; then
+        echo "   ❌ No tarball found in dist/"
+        exit 1
+      fi && \
+      pip install "$TARBALL" --force-reinstall --quiet
+    )
+
+    if [ $? -eq 0 ]; then
+      echo "   ✅ darwin-cli installed successfully"
+      SUCCESSFUL_IMAGES+=("CLI: darwin-cli")
+    else
+      echo "   ❌ Failed to install darwin-cli"
+      echo "   Check the error above for details"
+      FAILED_IMAGES+=("CLI: darwin-cli (installation failed)")
+    fi
+  fi
+else
+  echo "⏭️  Skipping darwin-cli setup (disabled in configuration)"
+fi
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "                    SETUP SUMMARY"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Count successes and failures
+SUCCESS_COUNT=${#SUCCESSFUL_IMAGES[@]}
+FAILURE_COUNT=${#FAILED_IMAGES[@]}
+TOTAL_COUNT=$((SUCCESS_COUNT + FAILURE_COUNT))
+
+echo "Total images processed: $TOTAL_COUNT"
+echo "✅ Successful: $SUCCESS_COUNT"
+echo "❌ Failed: $FAILURE_COUNT"
+echo ""
+
+# Show successful images
+if [ $SUCCESS_COUNT -gt 0 ]; then
+  echo "✅ Successfully processed images:"
+  for img in "${SUCCESSFUL_IMAGES[@]}"; do
+    echo "   ✓ $img"
+  done
+  echo ""
+fi
+
+# Show failed images
+if [ $FAILURE_COUNT -gt 0 ]; then
+  echo "❌ Failed images:"
+  for img in "${FAILED_IMAGES[@]}"; do
+    echo "   ✗ $img"
+  done
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "⚠️  Setup completed with failures!"
+  echo ""
+  echo "Some images failed to pull/build. The platform may not function correctly."
+  echo ""
+  if [ "$IMAGE_MODE" = "release" ] || [ "$IMAGE_MODE" = "snapshot" ]; then
+    echo "Suggestions:"
+    echo "  - Verify images are published to darwinhq/ on Docker Hub"
+    echo "  - Try building locally: ./setup.sh -d"
+    echo "  - Check network connectivity"
+  else
+    echo "Suggestions:"
+    echo "  - Check build logs above for specific errors"
+    echo "  - Ensure all dependencies are installed"
+    echo "  - Try pulling from remote: ./setup.sh (without -d flag)"
+  fi
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  exit 1
+else
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "✅ Setup completed successfully!"
+  echo ""
+  echo "All images were processed successfully. Your platform is ready to use."
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+fi

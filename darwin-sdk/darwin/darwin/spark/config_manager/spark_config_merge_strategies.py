@@ -1,7 +1,6 @@
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 from darwin.exceptions import UnsupportedSparkConfigError
-from darwin.util.utils import get_default_jars_path
 
 # Define a type alias for the merge strategy function, similar to Enums
 MergeStrategy = Callable[[Optional[str], Optional[str]], str]
@@ -35,7 +34,10 @@ class SparkConfigMergeStrategies:
     UNSUPPORTED: MergeStrategy = lambda default, user: (
         (_ for _ in ()).throw(
             UnsupportedSparkConfigError(
-                "Setting 'spark.jars' and 'spark.jars.packages' manually is not supported — it must be derived automatically. Use libraries to install jars."
+                (
+                    "Setting 'spark.jars' and 'spark.jars.packages' manually is not supported — "
+                    "it must be derived automatically. Use libraries to install jars."
+                )
             )
         )
         if user

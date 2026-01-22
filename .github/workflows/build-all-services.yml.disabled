@@ -1,0 +1,202 @@
+name: 🚀 Release All Darwin Services
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*.*.*'  # Cohesive releases: v1.0.0 releases all services
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (leave empty for auto-generated snapshot)'
+        required: false
+
+env:
+  REGISTRY: docker.io
+  ORG_NAME: darwinhq
+
+jobs:
+  # Extract version from tag or generate snapshot
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      tag_latest: ${{ steps.get_version.outputs.tag_latest }}
+    steps:
+      - name: Get version from tag or generate snapshot
+        id: get_version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            # Production release from tag
+            VERSION=${GITHUB_REF#refs/tags/v}
+            TAG_LATEST="true"
+            echo "🎉 Production Release: v$VERSION"
+          elif [[ "${{ github.event.inputs.version }}" != "" ]]; then
+            # Manual trigger with version
+            VERSION="${{ github.event.inputs.version }}"
+            TAG_LATEST="false"
+            echo "🔧 Manual Build: $VERSION"
+          else
+            # Fallback to snapshot
+            VERSION="snapshot-${GITHUB_SHA::8}"
+            TAG_LATEST="false"
+            echo "📦 Snapshot: $VERSION"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag_latest=$TAG_LATEST" >> $GITHUB_OUTPUT
+
+  # Build all services in parallel
+  build-services:
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - name: darwin-catalog
+            context: ./darwin-catalog
+            dockerfile: ./darwin-catalog/Dockerfile
+            build-type: standalone
+          
+          - name: darwin-compute
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: darwin-compute
+            app-dir: .
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: darwin-cluster-manager
+            context: .
+            dockerfile: ./deployer/images/Dockerfile-golang
+            build-type: odin
+            base-path: darwin-cluster-manager
+            app-dir: .
+            base-image: golang:1.18-bookworm-slim
+          
+          - name: darwin-mlflow
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: mlflow
+            app-dir: .
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: darwin-mlflow-app
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: mlflow
+            app-dir: .
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: ml-serve-app
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: ml-serve-app
+            app-dir: .
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: artifact-builder
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: artifact-builder
+            app-dir: .
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: darwin-workflow
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: darwin-workflow
+            app-dir: .
+            base-image: python:3.9.7-pip-bookworm-slim
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+          buildkitd-flags: --allow-insecure-entitlement network.host
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # For ODIN builds: Run .odin build script first
+      - name: Run ODIN build script
+        if: matrix.service.build-type == 'odin'
+        run: |
+          echo "🔨 Building ${{ matrix.service.name }} using ODIN build system"
+          cd ${{ matrix.service.base-path }}
+          
+          mkdir -p ./${{ matrix.service.app-dir }}/target/${{ matrix.service.name }}
+          
+          if [ -f ".odin/${{ matrix.service.name }}/build.sh" ]; then
+            bash .odin/${{ matrix.service.name }}/build.sh
+            cp -r .odin/${{ matrix.service.name }}/. ./${{ matrix.service.app-dir }}/target/${{ matrix.service.name }}/.odin
+            chmod 755 ./${{ matrix.service.app-dir }}/target/${{ matrix.service.name }}/.odin
+          fi
+          
+          cd ..
+
+      - name: Build and push ${{ matrix.service.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          network: host
+          allow: network.host
+          tags: |
+            darwinhq/${{ matrix.service.name }}:${{ needs.prepare.outputs.version }}
+            ${{ needs.prepare.outputs.tag_latest == 'true' && format('darwinhq/{0}:latest', matrix.service.name) || '' }}
+          build-args: |
+            BASE_IMAGE=darwinhq/${{ matrix.service.base-image }}
+            APP_NAME=${{ matrix.service.name }}
+            APP_BASE_DIR=${{ matrix.service.base-path }}
+            APP_DIR=${{ matrix.service.app-dir }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.service.name }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Summary job
+  release-summary:
+    needs: [prepare, build-services]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release Summary
+        run: |
+          if [[ "${{ needs.prepare.outputs.tag_latest }}" == "true" ]]; then
+            echo "## 🎉 Darwin Platform v${{ needs.prepare.outputs.version }} Released!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## 📦 Darwin Platform Snapshot Build" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ needs.prepare.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All services built and pushed to **darwinhq** organization:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- darwinhq/darwin-catalog:${{ needs.prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- darwinhq/darwin-compute:${{ needs.prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- darwinhq/darwin-cluster-manager:${{ needs.prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- darwinhq/darwin-mlflow:${{ needs.prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- darwinhq/darwin-mlflow-app:${{ needs.prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- darwinhq/ml-serve-app:${{ needs.prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- darwinhq/artifact-builder:${{ needs.prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- darwinhq/darwin-workflow:${{ needs.prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY

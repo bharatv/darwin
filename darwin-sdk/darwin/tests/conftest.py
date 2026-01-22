@@ -63,11 +63,17 @@ def mock_compute_service(mock_cluster_response, request):
     # Register the HTTP mock
     if mock_cluster_response.data.cluster_id == "UNKNOWN_CLUSTER_ID":
         responses.add(
-            responses.GET, f"{base_url}/cluster/{cluster_id}/", json={"detail": "Cluster not found"}, status=404
+            responses.GET,
+            f"{base_url}/cluster/{cluster_id}/",
+            json={"detail": "Cluster not found"},
+            status=404,
         )
     else:
         responses.add(
-            responses.GET, f"{base_url}/cluster/{cluster_id}/", json=mock_cluster_response.to_dict(), status=200
+            responses.GET,
+            f"{base_url}/cluster/{cluster_id}/",
+            json=mock_cluster_response.to_dict(),
+            status=200,
         )
     # Register cluster id
     os.environ["CLUSTER_ID"] = cluster_id

@@ -1,6 +1,12 @@
 #!/bin/sh
 set -e
 
+# Get the project root directory (same as setup.sh and start-cluster.sh)
+# This ensures config.env is always read from the same location
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+CONFIG_ENV="$PROJECT_ROOT/.setup/config.env"
+
 # Check for init configuration
 ENABLED_SERVICES_FILE=".setup/enabled-services.yaml"
 if [ ! -f "$ENABLED_SERVICES_FILE" ]; then
@@ -10,47 +16,14 @@ if [ ! -f "$ENABLED_SERVICES_FILE" ]; then
 fi
 echo "✅ Found configuration: $ENABLED_SERVICES_FILE"
 
-# ============================================================================
-# CLI TOOLS SETUP
-# ============================================================================
-# Check if hermes-cli is enabled and install if needed
-HERMES_CLI_ENABLED=$(yq eval '.cli-tools.hermes-cli // false' "$ENABLED_SERVICES_FILE" 2>/dev/null || echo "false")
-
-if [ "$HERMES_CLI_ENABLED" = "true" ]; then
-  echo ""
-  echo "📦 Setting up hermes-cli..."
-  
-  HERMES_CLI_PATH="hermes-cli"
-  if [ ! -d "$HERMES_CLI_PATH" ]; then
-    echo "   ⚠️  hermes-cli directory not found at $HERMES_CLI_PATH, skipping..."
-  else
-    VENV_PATH="$HERMES_CLI_PATH/.venv"
-    
-    # Create venv if it doesn't exist
-    if [ ! -d "$VENV_PATH" ]; then
-      echo "   Creating virtual environment..."
-      python3.9 -m venv "$VENV_PATH"
-    fi
-
-    # Install hermes-cli
-    echo "   Installing hermes-cli package..."
-    (
-      cd "$HERMES_CLI_PATH" && source .venv/bin/activate && pip install -e . --force-reinstall --no-cache-dir
-    )
-
-    if [ $? -eq 0 ]; then
-      echo "   ✅ hermes-cli installed successfully"
-      echo "   To use: source $HERMES_CLI_PATH/.venv/bin/activate"
-    else
-      echo "   ❌ Failed to install hermes-cli"
-    fi
-  fi
-  echo ""
-fi
-
 # Source the config.env file
+if [ ! -f "$CONFIG_ENV" ]; then
+    echo "❌ config.env not found at $CONFIG_ENV"
+    echo "   Please run ./setup.sh first to create config.env"
+    exit 1
+fi
 set -o allexport
-. config.env
+. "$CONFIG_ENV"
 set +o allexport
 
 echo "🔧 Setting up KUBECONFIG: $KUBECONFIG"
@@ -94,7 +67,6 @@ get_helm_path() {
     "ml-serve-app") echo "services.services.ml-serve-app.enabled" ;;
     "artifact-builder") echo "services.services.artifact-builder.enabled" ;;
     "darwin-catalog") echo "services.services.catalog.enabled" ;;
-    "darwin-workflow") echo "services.services.workflow.enabled" ;;
     *) echo "" ;;
   esac
 }
@@ -130,12 +102,96 @@ echo ""
 echo "📦 Installing Darwin Platform with configuration overrides..."
 
 # Install Darwin Platform umbrella chart with overrides
+echo "   Deploying helm chart (with --wait for all pods)..."
+echo "   This may take several minutes..."
 helm upgrade --install darwin ./helm/darwin \
   --namespace darwin \
   --create-namespace \
   --wait \
   --timeout 600s \
   $HELM_OVERRIDES
+HELM_EXIT_CODE=$?
+
+if [ $HELM_EXIT_CODE -ne 0 ]; then
+  echo "❌ Helm deployment failed with exit code $HELM_EXIT_CODE!"
+  echo ""
+  echo "Checking deployment status..."
+  helm status darwin -n darwin 2>/dev/null || echo "   (helm release not found)"
+  echo ""
+  echo "Checking pods..."
+  kubectl get pods -n darwin 2>/dev/null || echo "   (no pods found)"
+  echo ""
+  echo "Checking helm release history..."
+  helm history darwin -n darwin 2>/dev/null || echo "   (no history found)"
+  exit 1
+fi
+
+echo "✅ Helm chart deployed (all pods ready via --wait)"
+
+# ============================================================================
+# UPLOAD KUBECONFIG TO S3 (for darwin-cluster-manager)
+# ============================================================================
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "               UPLOADING KUBECONFIG TO S3"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Check if both localstack and darwin-cluster-manager are enabled
+LOCALSTACK_ENABLED=$(yq eval '.datastores.localstack // false' "$ENABLED_SERVICES_FILE")
+CLUSTER_MANAGER_ENABLED=$(yq eval '.applications.darwin-cluster-manager // false' "$ENABLED_SERVICES_FILE")
+
+if [ "$LOCALSTACK_ENABLED" = "true" ] && [ "$CLUSTER_MANAGER_ENABLED" = "true" ]; then
+  
+  if [ -f "$KUBECONFIG" ]; then
+    echo "📦 Uploading kubeconfig to S3 for darwin-cluster-manager..."
+    
+    # Create a temporary file with the server address updated for in-cluster use
+    KUBECONFIG_TEMP=$(mktemp)
+    cp "$KUBECONFIG" "$KUBECONFIG_TEMP"
+    
+    # Update the server address to use in-cluster DNS name
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      sed -i '' 's|server: https://127\.0\.0\.1:[0-9]*|server: https://kubernetes.default.svc|' "$KUBECONFIG_TEMP"
+    else
+      sed -i 's|server: https://127\.0\.0\.1:[0-9]*|server: https://kubernetes.default.svc|' "$KUBECONFIG_TEMP"
+    fi
+    
+    # Wait for LocalStack to be accessible via port-forward
+    echo "   Setting up port-forward to LocalStack..."
+    kubectl port-forward svc/darwin-localstack -n darwin 4566:4566 &
+    PF_PID=$!
+    sleep 3
+    
+    # Upload to S3 using AWS CLI
+    set +e
+    AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test aws s3 \
+      --endpoint-url=http://localhost:4566 \
+      cp "$KUBECONFIG_TEMP" s3://darwin/mlp/cluster_manager/configs/kind 2>&1
+    UPLOAD_EXIT_CODE=$?
+    set -e
+    
+    # Cleanup
+    kill $PF_PID 2>/dev/null || true
+    rm -f "$KUBECONFIG_TEMP"
+    
+    if [ $UPLOAD_EXIT_CODE -eq 0 ]; then
+      echo "✅ Kubeconfig uploaded to S3 successfully"
+    else
+      echo "❌ Failed to upload kubeconfig to S3 (exit code: $UPLOAD_EXIT_CODE)"
+      echo "⚠️ darwin-cluster-manager may not be able to access kubeconfig"
+    fi
+  else
+    echo "⚠️  Kubeconfig not found at $KUBECONFIG"
+    echo "   darwin-cluster-manager may not work correctly"
+  fi
+else
+  if [ "$LOCALSTACK_ENABLED" != "true" ]; then
+    echo "⏭️  Skipping kubeconfig upload (LocalStack disabled)"
+  else
+    echo "⏭️  Skipping kubeconfig upload (darwin-cluster-manager disabled)"
+  fi
+fi
 
 echo "✅ Deployment completed!"
 
@@ -160,7 +216,9 @@ if [ "$SDK_ENABLED" = "true" ] && [ "$COMPUTE_ENABLED" = "true" ]; then
   sleep 5
   
   # Register the runtime via ingress (localhost/compute)
-  RESPONSE=$(curl -s -X POST http://localhost/compute/runtime/v2/create \
+  # Add timeout to prevent hanging in CI
+  set +e
+  RESPONSE=$(curl -s --max-time 30 -X POST http://localhost/compute/runtime/v2/create \
     -H "Content-Type: application/json" \
     -d '{
       "runtime": "1.0",
@@ -170,13 +228,17 @@ if [ "$SDK_ENABLED" = "true" ] && [ "$COMPUTE_ENABLED" = "true" ]; then
       "user": "Darwin",
       "spark_connect": false,
       "spark_auto_init": true
-    }')
+    }' 2>&1)
+  CURL_EXIT_CODE=$?
+  set -e
   
   # Check response
-  if echo "$RESPONSE" | grep -q '"status":"SUCCESS"'; then
+  if [ $CURL_EXIT_CODE -eq 0 ] && echo "$RESPONSE" | grep -q '"status":"SUCCESS"'; then
     echo "   ✅ Darwin SDK runtime '1.0' registered successfully"
   else
-    echo "   ⚠️  Runtime registration response: $RESPONSE"
+    echo "   ⚠️  Runtime registration failed or incomplete (curl exit: $CURL_EXIT_CODE)"
+    echo "   ⚠️  Response: $RESPONSE"
+    echo "   ⚠️  This is non-critical, continuing..."
   fi
 elif [ "$SDK_ENABLED" != "true" ]; then
   echo "⏭️  Skipping darwin-sdk runtime registration (darwin-sdk-runtime disabled)"
@@ -184,14 +246,31 @@ else
   echo "⏭️  Skipping darwin-sdk runtime registration (darwin-compute disabled)"
 fi
 
-# Show hermes-cli activation reminder if it was installed
-HERMES_CLI_ENABLED=$(yq eval '.cli-tools.hermes-cli // false' "$ENABLED_SERVICES_FILE" 2>/dev/null || echo "false")
-if [ "$HERMES_CLI_ENABLED" = "true" ]; then
+# Show darwin-cli activation reminder if it was installed
+DARWIN_CLI_ENABLED=$(yq eval '.cli-tools.darwin-cli // false' "$ENABLED_SERVICES_FILE" 2>/dev/null || echo "false")
+if [ "$DARWIN_CLI_ENABLED" = "true" ]; then
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "📦 To use hermes-cli, activate the virtual environment:"
+  echo "                       DARWIN CLI"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
-  echo "   source hermes-cli/.venv/bin/activate"
+  echo "  darwin-cli was installed during setup.sh"
+  echo ""
+  echo "  To activate and use darwin-cli:"
+  echo ""
+  echo "    1. Activate the virtual environment:"
+  echo "       source .venv/bin/activate"
+  echo ""
+  echo "    2. Configure the environment (first time only):"
+  echo "       darwin config set --env darwin-local"
+  echo ""
+  echo "    3. Verify installation:"
+  echo "       darwin --help"
+  echo ""
+  echo "  Example commands:"
+  echo "    darwin compute list"
+  echo "    darwin workflow list"
+  echo "    darwin serve list"
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 fi

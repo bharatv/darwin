@@ -20,7 +20,7 @@ This service is designed to be deployed as part of the **Darwin** ecosystem. The
 ```
 Darwin Workflow:
 1. init.sh      → Select which services to enable (enable artifact-builder)
-2. setup.sh     → Build images, push to kind-registry (localhost:5000)
+2. setup.sh     → Get images (pull release or build with -d), push to kind-registry
 3. start.sh     → Deploy to kind cluster via Helm
 
 Image Building Flow (triggered by ML Serve App):
@@ -190,8 +190,10 @@ From the Darwin root directory:
 # 1. Configure which services to enable (enable artifact-builder)
 ./init.sh
 
-# 2. Build all images and set up the kind cluster
-./setup.sh
+# 2. Set up the kind cluster and get images
+./setup.sh        # Pull release images (default)
+# OR for development:
+# ./setup.sh -d   # Build images locally
 
 # 3. Deploy to Kubernetes
 ./start.sh
@@ -201,7 +203,7 @@ This automatically:
 - Creates a kind cluster with `kind-registry`
 - Builds the `artifact-builder` image and pushes it to the registry
 - Deploys with Docker socket mounted for building images
-- Configures `LOCAL_REGISTRY` to point to the kind-registry using `DOCKER_REGISTRY` value from `config.env`.
+- Configures `LOCAL_REGISTRY` to point to the kind-registry using `DOCKER_REGISTRY` value from `.setup/config.env`.
 
 ### 2. Access the API
 
@@ -240,10 +242,10 @@ localhost:5000/serve-app:v1.0.0
 
 ## Kind Registry (Local Container Registry)
 
-When running in the Darwin ecosystem, a local container registry (`kind-registry`) is automatically created during `setup.sh`. This registry:
+When running in the Darwin ecosystem, a local container registry (`kind-registry`) is automatically created during `setup.sh` (regardless of pull or build mode). This registry:
 
 - Runs as a Docker container on the host machine
-- Is accessible at a dynamically assigned port (stored in `config.env`)
+- Is accessible at a dynamically assigned port (stored in `.setup/config.env`)
 - Is connected to the kind cluster's network
 - Stores images that Kubernetes pods can pull
 
@@ -581,7 +583,7 @@ artifact-builder:
 
 2. **Cannot push to local registry**
    - Verify kind-registry is running: `docker ps | grep kind-registry`
-   - Check the registry port in `config.env`
+   - Check the registry port in `.setup/config.env`
    - Ensure `LOCAL_REGISTRY` env var matches the actual registry port
 
 3. **Database connection failed**

@@ -16,7 +16,11 @@ from darwin.spark.spark_resources import SparkResources
 @pytest.mark.skipif(os.getenv("ENV") == "stag", reason="skip this test for stag env")
 def test_spark_sql_get_databases(mock_prepare_resources, mock_cluster_response, mock_compute_service):
     mock_resources = SparkResources(
-        driver_cores=2, driver_memory="1G", executor_cores=2, executor_memory="1G", num_executors=2
+        driver_cores=2,
+        driver_memory="1G",
+        executor_cores=2,
+        executor_memory="1G",
+        num_executors=2,
     )
     mock_prepare_resources.return_value = mock_resources
     spark: SparkSession = darwin.init_spark()
@@ -31,7 +35,11 @@ def test_spark_sql_get_databases(mock_prepare_resources, mock_cluster_response, 
 @pytest.mark.skipif(os.getenv("ENV") == "stag", reason="skip this test for stag env")
 def test_spark_sql_get_tables(mock_prepare_resources, mock_cluster_response, mock_compute_service):
     mock_resources = SparkResources(
-        driver_cores=2, driver_memory="1G", executor_cores=2, executor_memory="1G", num_executors=2
+        driver_cores=2,
+        driver_memory="1G",
+        executor_cores=2,
+        executor_memory="1G",
+        num_executors=2,
     )
     mock_prepare_resources.return_value = mock_resources
     spark: SparkSession = darwin.init_spark()
@@ -48,7 +56,11 @@ def test_get_data_from_hive_table(mock_prepare_resources, mock_cluster_response,
     ray.shutdown()
     ray.init(address="local", num_cpus=6, include_dashboard=False)
     mock_resources = SparkResources(
-        driver_cores=2, driver_memory="1G", executor_cores=2, executor_memory="1G", num_executors=2
+        driver_cores=2,
+        driver_memory="1G",
+        executor_cores=2,
+        executor_memory="1G",
+        num_executors=2,
     )
     mock_prepare_resources.return_value = mock_resources
     spark: SparkSession = darwin.init_spark()
@@ -66,7 +78,11 @@ def test_get_data_from_iceberg_table(mock_prepare_resources, mock_cluster_respon
     ray.shutdown()
     ray.init(address="local", num_cpus=6, include_dashboard=False)
     mock_resources = SparkResources(
-        driver_cores=2, driver_memory="1G", executor_cores=2, executor_memory="1G", num_executors=2
+        driver_cores=2,
+        driver_memory="1G",
+        executor_cores=2,
+        executor_memory="1G",
+        num_executors=2,
     )
     mock_prepare_resources.return_value = mock_resources
     spark: SparkSession = darwin.init_spark()
@@ -84,7 +100,11 @@ def test_get_data_from_delta_table(mock_prepare_resources, mock_cluster_response
     ray.shutdown()
     ray.init(address="local", num_cpus=6, include_dashboard=False)
     mock_resources = SparkResources(
-        driver_cores=2, driver_memory="1G", executor_cores=2, executor_memory="1G", num_executors=2
+        driver_cores=2,
+        driver_memory="1G",
+        executor_cores=2,
+        executor_memory="1G",
+        num_executors=2,
     )
     mock_prepare_resources.return_value = mock_resources
     spark: SparkSession = darwin.init_spark()
@@ -102,7 +122,11 @@ def test_get_dbfs_table_in_aws_prod(mock_prepare_resources, mock_cluster_respons
     ray.shutdown()
     ray.init(address="local", num_cpus=6, include_dashboard=False)
     mock_resources = SparkResources(
-        driver_cores=2, driver_memory="1G", executor_cores=2, executor_memory="1G", num_executors=2
+        driver_cores=2,
+        driver_memory="1G",
+        executor_cores=2,
+        executor_memory="1G",
+        num_executors=2,
     )
     mock_prepare_resources.return_value = mock_resources
     spark: SparkSession = darwin.init_spark()

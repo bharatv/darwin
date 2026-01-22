@@ -12,7 +12,7 @@ echo "Workflow Dir: $WORKFLOW_DIR"
 echo "Airflow Dir: $SCRIPT_DIR"
 
 # Set KUBECONFIG to the correct path
-export KUBECONFIG="$PROJECT_ROOT_ABS/kind/config/kindkubeconfig.yaml"
+export KUBECONFIG="$PROJECT_ROOT_ABS/.setup/kindkubeconfig.yaml"
 
 # Configuration
 IMAGE_NAME="darwin-airflow"
@@ -30,7 +30,7 @@ echo ""
 echo "Step 1: Building Docker image..."
 # Build from workflow root directory (where model, core, airflow directories are)
 cd "$WORKFLOW_DIR"
-docker build --platform linux/amd64 -f Dockerfile.airflow -t ${IMAGE_NAME}:${IMAGE_TAG} .
+docker build --platform linux/amd64 -f Dockerfile.airflow -t ${IMAGE_NAME}:${IMAGE_TAG} --label "maintainer=darwin" .
 if [ $? -ne 0 ]; then
     echo "❌ Docker build failed"
     exit 1
@@ -99,4 +99,3 @@ echo "  kubectl exec -n ${NAMESPACE} -it deployment/darwin-airflow-scheduler -c 
 echo ""
 echo "To check DAGs:"
 echo "  kubectl exec -n ${NAMESPACE} -it deployment/darwin-airflow-scheduler -c airflow-scheduler -- airflow dags list"
-

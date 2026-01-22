@@ -1,15 +1,16 @@
 import os
 import time
 from functools import wraps
-from typing import Union, Dict, Optional
+from typing import Dict, Optional, Union
 from urllib.parse import urlparse
+
 import boto3
 
 from darwin.compute.get_cluster_response_dto import ClusterResponse
 from darwin.exceptions import InvalidClusterAttachedError
+from darwin.util.constants import SPARK_EVENT_LOG_DIR
 from darwin.util.enums import Environment
 from darwin.version import Version
-from darwin.util.constants import SPARK_EVENT_LOG_DIR
 
 
 def run_jupyter_line_magic(magic: str, line: str):
@@ -34,7 +35,13 @@ def get_default_spark_config_path(version: Union[str, Version]) -> str:
             "configs",
             f"spark_configs_{version}_{get_env().value.lower()}.ini",
         )
-    return os.path.join(os.path.dirname(__file__), "..", "spark", "configs", f"spark_configs_{version}.ini")
+    return os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "spark",
+        "configs",
+        f"spark_configs_{version}.ini",
+    )
 
 
 def get_application_config_path() -> str:
@@ -45,11 +52,7 @@ def get_jars(directory: str) -> str:
     """Get Hive JARs for metastore integration."""
     files = os.listdir(directory)
     # Filter for Hive JARs needed for metastore
-    jar_files = [
-        directory + "/" + f 
-        for f in files 
-        if f.endswith(".jar") and f.startswith("hive-")
-    ]
+    jar_files = [directory + "/" + f for f in files if f.endswith(".jar") and f.startswith("hive-")]
     return ":".join(jar_files)
 
 
@@ -95,7 +98,7 @@ def set_events_log_dir(default_spark_conf: Dict[str, str]) -> Dict[str, str]:
                 boto_client.put_object(Bucket=bucket_name, Key=folder_name)
             else:
                 eventlog_dir = default_event_logs_dir
-        except Exception as e:
+        except Exception:
             eventlog_dir = default_event_logs_dir
     else:
         eventlog_dir = default_event_logs_dir
@@ -152,7 +155,10 @@ def retry(retries=3, delay=1, exceptions=(Exception,)):
 def assert_ondemand_worker_group_is_attached(compute_metadata: ClusterResponse):
     if not compute_metadata.data.has_ondemand_worker_group:
         raise InvalidClusterAttachedError(
-            "No on-demand worker group found for the current running cluster. Please attach an on-demand worker group to the cluster."
+            (
+                "No on-demand worker group found for the current running cluster."
+                "Please attach an on-demand worker group to the cluster."
+            )
         )
 
 

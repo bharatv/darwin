@@ -31,7 +31,7 @@ class ComputeService:
         """
         try:
             return ClusterResponse.from_dict(
-                requests.get(self.application_config_client.get_compute_url() + f"/cluster/{self.cluster_id}/").json()
+                requests.get(self.application_config_client.get_compute_url() + f"/cluster/{self.cluster_id}").json()
             )
         except Exception as e:
             raise UnableToFetchComputeMetadataError("Unable to fetch compute metadata") from e

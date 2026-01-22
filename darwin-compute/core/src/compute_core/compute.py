@@ -42,6 +42,7 @@ from compute_model.constant.constants import DISK_TYPE, INSTANCE_ROLE, AZS, NODE
 
 
 @typechecked
+# TODO: This class is too large (900+ lines) - consider splitting into ClusterLifecycleService, ClusterQueryService, DashboardService
 class Compute:
     """
     _config: Config
@@ -80,7 +81,7 @@ class Compute:
         try:
             dcm_health = self.dcm.healthcheck()
         except Exception as e:
-            dcm_health = False
+            dcm_health = {"status": "FAILURE", "message": str(e)}
         return dcm_health
 
     def healthcheck(self):
@@ -96,6 +97,7 @@ class Compute:
         return f"{name}-v{str(version)}"
 
     def _get_latest_version(self, cluster_id: str):
+        # TODO: Fragile version parsing - consider storing version as separate column in DB
         artifact_id = self.dao.get_cluster_artifact_id(cluster_id)
         return int(artifact_id[artifact_id.rfind("-v") + 2 :]) if artifact_id else 1
 
@@ -105,6 +107,7 @@ class Compute:
         :param compute_request: Cluster definition object
         :return: Return the status of cluster creation and cluster_id
         """
+        # TODO: Extract cluster creation orchestration into a separate method/class for better testability
         cloud_env = self._config.get_cloud_env(
             default_cloud_env=self.get_default_cloud_env(compute_request.is_job_cluster),
             cloud_env=compute_request.cloud_env,
@@ -112,10 +115,12 @@ class Compute:
         cluster_id = get_random_id()
         logger.debug(f"Creating cluster with id: {cluster_id} in cloud env: {cloud_env}")
 
+        # TODO: Silent name modification may confuse users - consider returning the modified name explicitly
         if self.search_cluster_name(compute_request.name):
             compute_request.name = compute_request.name + "_" + cluster_id
         compute_request.cloud_env = cloud_env
         compute_request.cluster_id = cluster_id
+        # TODO: Hardcoded timezone "Asia/Kolkata" should be configurable or use UTC
         compute_request.created_on = str(datetime.now(tz=gettz("Asia/Kolkata")))
 
         compute_request = ESComputeDefinition.from_dict(compute_request.to_dict())
@@ -152,8 +157,10 @@ class Compute:
         :param cluster_id: Cluster identification
         :return: Returns the status of the request
         """
+        # TODO: Use ClusterStatus enum instead of hardcoded string "inactive"
         # If cluster is not in inactive state then throw error
         if self.dao.get_cluster_status(cluster_id) != "inactive":
+            # TODO: Use a custom exception type instead of generic RuntimeError
             raise RuntimeError("Cluster is not in stop state")
 
         event = ChronosEvent(
@@ -181,6 +188,7 @@ class Compute:
         resp = self.dao.get_cluster_info(cluster_id)
         return resp
 
+    # TODO: This method is too long (80+ lines) - extract event sending and DAO operations into helper methods
     def update_cluster(
         self,
         cluster_id: str,
@@ -212,6 +220,7 @@ class Compute:
             compute_request.created_on = cluster_info.created_on
 
             event_request = compute_request.to_dict(encode_json=True)
+            # TODO: This manual dict merging is fragile - consider using a proper merge utility or dataclass method
             compute_request = compute_request.to_dict()
             es_dict = cluster_info.to_dict()
             for key, value in compute_request.items():
@@ -516,6 +525,7 @@ class Compute:
             logger.debug(f"Cluster manager stop response: {response}")
             self.dao.stop_cluster(cluster_id)
 
+            # TODO: Remove this sleep - use ES refresh=True in the DAO or implement proper async waiting
             # Sleeping for ES to get updated - TODO: Need to check if refresh field works for ES_DAO, then can be removed
             time.sleep(0.5)
 
@@ -636,6 +646,7 @@ class Compute:
         """
         # Check if the new cluster name already exists or not
         if self.search_cluster_name(cluster_name):
+            # TODO: Use a custom ClusterNameExistsError instead of generic Exception
             raise Exception(ALREADY_EXIST)
         resp = self.dao.update_cluster_name(cluster_id, cluster_name)
         return resp
@@ -648,6 +659,7 @@ class Compute:
         :return: Returns the updated username
         """
         if not is_valid_email(cluster_user):
+            # TODO: Use a custom InvalidUserError instead of generic Exception
             raise Exception(INVALID_USER_NAME)
         resp: ESComputeDefinition = self.dao.update_cluster_user(cluster_id, cluster_user)
         return resp.user
@@ -818,6 +830,7 @@ class Compute:
         return events_mapper(action_details)
 
     def list_action_groups(self, cluster_id, offset, page_size, sort_order):
+        # TODO: N+1 query problem - consider joining events in a single query
         runtime_ids = self.dao.get_cluster_runtime_ids(cluster_id, offset, page_size, sort_order)
         action_groups = []
         for runtime_id in runtime_ids:
@@ -847,18 +860,23 @@ class Compute:
         return self.dao.update_status(cluster_id, status, active_pods, available_memory, last_updated_at)
 
     def send_event(self, event: ChronosEvent):
+        # TODO: Consider making event sending async to avoid blocking cluster operations
+        # TODO: Add retry logic or queue events for later delivery on failure
         try:
             logger.info(f"Sending event: {event}")
             self.event_service.send_event(event)
         except Exception as e:
+            # TODO: Silently swallowing exceptions here - consider at least incrementing a metric
             logger.error(f"Failed to send event: {event} due to error: {e}")
 
     def get_active_resources(self, cluster_id: str):
+        # TODO: Add timeout handling for Ray dashboard API calls
         try:
             ray_dashboard = self.get_internal_dashboards(cluster_id).get("ray_dashboard_url")
             nodes = RayClusterService(ray_dashboard).get_summary()
             return calculate_active_resource(nodes)
         except Exception as e:
+            # TODO: Returning zeros on error hides issues - consider raising or returning an error indicator
             logger.error(f"Error while getting active resources: {e}")
             return RayClusterResourceDTO(cores_used=0, memory_used=0)
 

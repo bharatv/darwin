@@ -1,0 +1,27 @@
+# Iris Classification Spark Example - Compute Cluster Configuration
+# Usage: darwin compute create --file examples/iris-classification/cluster-config.yaml
+#
+# This configuration creates a compute cluster with Darwin SDK runtime
+# which includes Ray + Spark support for distributed training.
+
+name: 'iris-spark-example'
+tags: ["test", "iris-classification", "spark"]
+runtime: '1.0'                    # Darwin SDK runtime with Spark support
+terminate_after_minutes: 10       # Auto-terminate after 10 minutes of inactivity
+user: 'test@abc.com'
+
+# Head node configuration
+head_node:
+  node:
+    cores: 4
+    memory: 4                     # 4GB memory
+    node_capacity_type: 'ondemand'
+
+# Worker node configuration
+worker_group:
+  - node:
+      cores: 2
+      memory: 4                   # 4GB memory per worker
+      node_capacity_type: 'ondemand'
+    min_pods: 1                   # Minimum 1 worker
+    max_pods: 2                   # Scale up to 2 workers

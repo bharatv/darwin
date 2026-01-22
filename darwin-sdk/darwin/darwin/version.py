@@ -23,13 +23,25 @@ class Version:
         return f"Version({self.major}.{self.minor}.{self.patch})"
 
     def __eq__(self, other):
-        return (self.major, self.minor, self.patch) == (other.major, other.minor, other.patch)
+        return (self.major, self.minor, self.patch) == (
+            other.major,
+            other.minor,
+            other.patch,
+        )
 
     def __lt__(self, other):
-        return (self.major, self.minor, self.patch) < (other.major, other.minor, other.patch)
+        return (self.major, self.minor, self.patch) < (
+            other.major,
+            other.minor,
+            other.patch,
+        )
 
     def __gt__(self, other):
-        return (self.major, self.minor, self.patch) > (other.major, other.minor, other.patch)
+        return (self.major, self.minor, self.patch) > (
+            other.major,
+            other.minor,
+            other.patch,
+        )
 
     def __le__(self, other):
         return self < other or self == other

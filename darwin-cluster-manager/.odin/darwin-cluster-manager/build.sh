@@ -14,9 +14,5 @@ cp -rf ./go.mod ./target/darwin-cluster-manager/go.mod
 cp -rf ./go.sum ./target/darwin-cluster-manager/go.sum
 cp -rf ./main.go ./target/darwin-cluster-manager/main.go
 
-# Copy the kind kubeconfig file to the target directory
+# Create configs directory for runtime kubeconfig caching (downloaded from S3)
 mkdir -p ./target/darwin-cluster-manager/configs
-cp ../kind/config/kindkubeconfig.yaml ./target/darwin-cluster-manager/configs/kind
-
-# Update the kubeconfig server address to use the in-cluster DNS name
-sed -i '' 's|server: https://127\.0\.0\.1:[0-9]*|server: https://kubernetes.default.svc|' ./target/darwin-cluster-manager/configs/kind

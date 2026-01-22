@@ -50,7 +50,11 @@ def _is_dynamic_allocation_enabled(spark_conf: dict) -> bool:
 
 def prepare_resources(spark_conf: dict) -> SparkResources:
     spark_resources: SparkResources = SparkResources(
-        driver_cores=1, driver_memory="1G", executor_cores=1, executor_memory="1G", num_executors=1
+        driver_cores=1,
+        driver_memory="1G",
+        executor_cores=1,
+        executor_memory="1G",
+        num_executors=1,
     )
     spark_conf = spark_conf or {}
     if not ray.is_initialized():
@@ -69,7 +73,10 @@ def prepare_resources(spark_conf: dict) -> SparkResources:
                 "spark.executor.memory",
                 spark_resources.add_executor_memory(
                     int(
-                        spark_conf.get("spark.darwin.nodeMemoryFactor", SPARK_MEMORY_UTILIZATION_FACTOR)
+                        spark_conf.get(
+                            "spark.darwin.nodeMemoryFactor",
+                            SPARK_MEMORY_UTILIZATION_FACTOR,
+                        )
                         * node["Resources"]["memory"]
                         / pow(10, 9)
                     )

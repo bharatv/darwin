@@ -1,0 +1,433 @@
+name: 🚀 Darwin Platform Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., 1.0.0)'
+        required: true
+
+env:
+  REGISTRY: docker.io
+  ORG_NAME: darwinhq
+
+jobs:
+  # Step 1: Build base images
+  build-base-images:
+    name: Build Base Images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        base:
+          - name: python
+            image: python:3.9.7-pip-bookworm-slim
+            dockerfile: deployer/images/python-3.9.7/Dockerfile
+            context: deployer/images/python-3.9.7
+          - name: java
+            image: java:11-maven-bookworm-slim
+            dockerfile: deployer/images/java-11/Dockerfile
+            context: deployer/images/java-11
+          - name: golang
+            image: golang:1.18-bookworm-slim
+            dockerfile: deployer/images/golang-1.18/Dockerfile
+            context: deployer/images/golang-1.18
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+          buildkitd-flags: --allow-insecure-entitlement network.host
+      
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Build and push ${{ matrix.base.name }}
+        id: build
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.base.context }}
+          file: ${{ matrix.base.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          network: host
+          allow: network.host
+          tags: |
+            ${{ env.ORG_NAME }}/${{ matrix.base.image }}-${{ steps.version.outputs.version }}
+            ${{ github.event_name == 'release' && format('{0}/{1}', env.ORG_NAME, matrix.base.image) || '' }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.base.name }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Record build status
+        run: |
+          if [[ "${{ steps.build.outcome }}" == "success" ]]; then
+            echo "✅ Base: ${{ matrix.base.name }} (${{ env.ORG_NAME }}/${{ matrix.base.image }})" >> base-results.txt
+          else
+            echo "❌ Base: ${{ matrix.base.name }} (${{ env.ORG_NAME }}/${{ matrix.base.image }})" >> base-results.txt
+          fi
+      
+      - name: Upload base image results
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-result-${{ matrix.base.name }}
+          path: base-results.txt
+
+  # Step 2: Build Darwin applications
+  build-applications:
+    name: Build Darwin Applications
+    needs: [build-base-images]
+    if: always()
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: darwin-catalog
+            context: ./darwin-catalog
+            dockerfile: ./darwin-catalog/Dockerfile
+            build-type: standalone
+          
+          - name: darwin-compute
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: darwin-compute
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: darwin-cluster-manager
+            context: .
+            dockerfile: ./deployer/images/Dockerfile-golang
+            build-type: odin
+            base-path: darwin-cluster-manager
+            base-image: golang:1.18-bookworm-slim
+          
+          - name: darwin-mlflow
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: mlflow
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: darwin-mlflow-app
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: mlflow
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: ml-serve-app
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: ml-serve-app
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: artifact-builder
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: artifact-builder
+            base-image: python:3.9.7-pip-bookworm-slim
+          
+          - name: darwin-workflow
+            context: .
+            dockerfile: ./deployer/images/Dockerfile
+            build-type: odin
+            base-path: darwin-workflow
+            base-image: python:3.9.7-pip-bookworm-slim
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Run ODIN build script
+        if: matrix.service.build-type == 'odin'
+        continue-on-error: true
+        run: |
+          cd ${{ matrix.service.base-path }}
+          mkdir -p ./target/${{ matrix.service.name }}
+          if [ -f ".odin/${{ matrix.service.name }}/build.sh" ]; then
+            bash .odin/${{ matrix.service.name }}/build.sh
+            cp -r .odin/${{ matrix.service.name }}/. ./target/${{ matrix.service.name }}/.odin
+            chmod 755 ./target/${{ matrix.service.name }}/.odin
+          fi
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+          buildkitd-flags: --allow-insecure-entitlement network.host
+      
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Build and push ${{ matrix.service.name }}
+        id: build
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          network: host
+          allow: network.host
+          tags: |
+            ${{ env.ORG_NAME }}/${{ matrix.service.name }}:${{ steps.version.outputs.version }}
+            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, matrix.service.name) || '' }}
+          build-args: |
+            BASE_IMAGE=${{ env.ORG_NAME }}/${{ matrix.service.base-image }}
+            APP_NAME=${{ matrix.service.name }}
+            APP_BASE_DIR=${{ matrix.service.base-path }}
+            APP_DIR=.
+          labels: |
+            org.opencontainers.image.title=${{ matrix.service.name }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Record build status
+        run: |
+          if [[ "${{ steps.build.outcome }}" == "success" ]]; then
+            echo "✅ App: ${{ matrix.service.name }}" >> app-results.txt
+          else
+            echo "❌ App: ${{ matrix.service.name }}" >> app-results.txt
+          fi
+      
+      - name: Upload application results
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-result-${{ matrix.service.name }}
+          path: app-results.txt
+
+  # Step 3: Build runtime images
+  build-runtimes:
+    name: Build Runtime Images
+    needs: [build-base-images]
+    if: always()
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime:
+          - name: ray-2.37.0
+            dockerfile: darwin-compute/runtimes/cpu/New-Lightweight/Ray2.37_Py3.10/Dockerfile
+            context: darwin-compute/runtimes/cpu/New-Lightweight/Ray2.37_Py3.10
+            image: ray:2.37.0
+          
+          - name: ray-2.53.0
+            dockerfile: darwin-compute/runtimes/cpu/Ray2.53.0_Py3.10/Dockerfile
+            context: darwin-compute/runtimes/cpu/Ray2.53.0_Py3.10
+            image: ray:2.53.0
+          
+          - name: ray-darwin-sdk
+            dockerfile: darwin-compute/runtimes/cpu/New-Lightweight/Ray2.37_Py3.10_Spark3.5.0_DarwinSDK/Dockerfile
+            context: darwin-compute/runtimes/cpu/New-Lightweight/Ray2.37_Py3.10_Spark3.5.0_DarwinSDK
+            image: ray:2.37.0-darwin-sdk
+          
+          - name: serve-runtime
+            dockerfile: ml-serve-app/runtime/darwin-serve-runtime/Dockerfile
+            context: ml-serve-app/runtime/darwin-serve-runtime
+            image: serve-md-runtime:latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+          buildkitd-flags: --allow-insecure-entitlement network.host
+      
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Build and push ${{ matrix.runtime.name }}
+        id: build
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.runtime.context }}
+          file: ${{ matrix.runtime.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          network: host
+          allow: network.host
+          tags: |
+            ${{ env.ORG_NAME }}/${{ matrix.runtime.image }}-${{ steps.version.outputs.version }}
+            ${{ github.event_name == 'release' && format('{0}/{1}', env.ORG_NAME, matrix.runtime.image) || '' }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.runtime.name }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Record build status
+        run: |
+          if [[ "${{ steps.build.outcome }}" == "success" ]]; then
+            echo "✅ Runtime: ${{ matrix.runtime.name }} (${{ env.ORG_NAME }}/${{ matrix.runtime.image }})" >> runtime-results.txt
+          else
+            echo "❌ Runtime: ${{ matrix.runtime.name }} (${{ env.ORG_NAME }}/${{ matrix.runtime.image }})" >> runtime-results.txt
+          fi
+      
+      - name: Upload runtime results
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-result-${{ matrix.runtime.name }}
+          path: runtime-results.txt
+
+  # Final summary with success/failure breakdown
+  release-summary:
+    name: Release Summary
+    needs: [build-base-images, build-applications, build-runtimes]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-result-*"
+          merge-multiple: true
+      
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Generate Release Summary
+        id: summary
+        run: |
+          echo "## 🚀 Darwin Platform ${{ steps.version.outputs.version }} Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Create empty all-results file if it doesn't exist
+          touch all-results.txt
+          
+          # Combine all results (files may not exist if jobs failed early)
+          cat base-results.txt 2>/dev/null >> all-results.txt || true
+          cat app-results.txt 2>/dev/null >> all-results.txt || true
+          cat runtime-results.txt 2>/dev/null >> all-results.txt || true
+          
+          # Count successes and failures with safer logic
+          SUCCESS_COUNT=$(grep -c "✅" all-results.txt 2>/dev/null || echo "0")
+          FAILURE_COUNT=$(grep -c "❌" all-results.txt 2>/dev/null || echo "0")
+          
+          # Ensure we have valid integers
+          SUCCESS_COUNT=${SUCCESS_COUNT:-0}
+          FAILURE_COUNT=${FAILURE_COUNT:-0}
+          TOTAL_COUNT=$((SUCCESS_COUNT + FAILURE_COUNT))
+          
+          echo "**Build Results:** $SUCCESS_COUNT/$TOTAL_COUNT successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Show base images
+          echo "### Base Images (3)" >> $GITHUB_STEP_SUMMARY
+          grep "Base:" all-results.txt 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "- No base image results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Show applications
+          echo "### Darwin Applications (8)" >> $GITHUB_STEP_SUMMARY
+          grep "App:" all-results.txt 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "- No application results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Show runtimes
+          echo "### Runtime Images (4)" >> $GITHUB_STEP_SUMMARY
+          grep "Runtime:" all-results.txt 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "- No runtime results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Show only failures if any
+          if [ "$FAILURE_COUNT" -gt 0 ]; then
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ❌ Failed Builds ($FAILURE_COUNT)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            grep "❌" all-results.txt 2>/dev/null >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Warning:** Some images failed to build. Check individual job logs for details." >> $GITHUB_STEP_SUMMARY
+            echo "has_failures=true" >> $GITHUB_OUTPUT
+          else
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 🎉 All Images Built Successfully!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All 15 images have been pushed to **darwinhq** organization on Docker Hub." >> $GITHUB_STEP_SUMMARY
+            echo "has_failures=false" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** docker.io/darwinhq" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Fail workflow if any builds failed
+        if: steps.summary.outputs.has_failures == 'true'
+        run: |
+          echo "❌ One or more images failed to build"
+          exit 1
