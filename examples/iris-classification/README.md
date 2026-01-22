@@ -215,9 +215,9 @@ spark_configs = {
     "spark.sql.session.timeZone": "UTC",
     "spark.sql.shuffle.partitions": "4",
     "spark.default.parallelism": "4",
-    "spark.executor.memory": "1g",
+    "spark.executor.memory": "2g",
     "spark.executor.cores": "1",
-    "spark.driver.memory": "1g",
+    "spark.driver.memory": "2g",
     "spark.executor.instances": "2",
 }
 
@@ -422,11 +422,6 @@ Before using serve commands, configure your authentication token:
 darwin serve configure
 ```
 
-This will prompt you for a token. Use the default token for local development:
-```
-admin-token-default-change-in-production
-```
-
 ---
 
 ## Step 10: Create Serve Environment
@@ -476,14 +471,6 @@ darwin serve deploy-model \
   --max-replicas 3
 ```
 
-Check deployment status:
-
-```bash
-darwin serve status --name iris-spark-classifier --env darwin-local
-```
-
-Wait until the status shows `RUNNING` (deployment status).
-
 ---
 
 ## Step 13: Test Inference
@@ -493,7 +480,7 @@ Test the deployed model with sample requests:
 **Using curl:**
 
 ```bash
-curl -X POST http://localhost/serve/iris-spark-classifier/predict \
+curl -X POST http://localhost/iris-spark-classifier/predict \
   -H "Content-Type: application/json" \
   -d @examples/iris-classification/sample-request.json
 ```
@@ -502,14 +489,12 @@ curl -X POST http://localhost/serve/iris-spark-classifier/predict \
 
 ```json
 {
-  "instances": [
-    {
-      "sepal_length": 5.1,
-      "sepal_width": 3.5,
-      "petal_length": 1.4,
-      "petal_width": 0.2
-    }
-  ]
+  "features": {
+    "sepal_length": 5.1,
+    "sepal_width": 3.5,
+    "petal_length": 1.4,
+    "petal_width": 0.2
+  }
 }
 ```
 
@@ -517,12 +502,8 @@ curl -X POST http://localhost/serve/iris-spark-classifier/predict \
 
 ```json
 {
-  "predictions": [
-    {
-      "class": 0,
-      "species": "setosa",
-      "probability": [0.95, 0.03, 0.02]
-    }
+  "scores": [
+    0
   ]
 }
 ```
@@ -530,15 +511,20 @@ curl -X POST http://localhost/serve/iris-spark-classifier/predict \
 **Test with different iris samples:**
 
 ```bash
-# Versicolor sample
-curl -X POST http://localhost/serve/iris-spark-classifier/predict \
+# Setosa sample (class 0)
+curl -X POST http://localhost/iris-spark-classifier/predict \
   -H "Content-Type: application/json" \
-  -d '{"instances": [{"sepal_length": 5.9, "sepal_width": 3.0, "petal_length": 4.2, "petal_width": 1.5}]}'
+  -d '{"features": {"sepal_length": 5.1, "sepal_width": 3.5, "petal_length": 1.4, "petal_width": 0.2}}'
 
-# Virginica sample
-curl -X POST http://localhost/serve/iris-spark-classifier/predict \
+# Versicolor sample (class 1)
+curl -X POST http://localhost/iris-spark-classifier/predict \
   -H "Content-Type: application/json" \
-  -d '{"instances": [{"sepal_length": 6.7, "sepal_width": 3.0, "petal_length": 5.2, "petal_width": 2.3}]}'
+  -d '{"features": {"sepal_length": 5.9, "sepal_width": 3.0, "petal_length": 4.2, "petal_width": 1.5}}'
+
+# Virginica sample (class 2)
+curl -X POST http://localhost/iris-spark-classifier/predict \
+  -H "Content-Type: application/json" \
+  -d '{"features": {"sepal_length": 6.7, "sepal_width": 3.0, "petal_length": 5.2, "petal_width": 2.3}}'
 ```
 
 ---
@@ -549,12 +535,6 @@ When done, undeploy the serve application:
 
 ```bash
 darwin serve undeploy-model --serve-name iris-spark-classifier --env darwin-local
-```
-
-Verify undeployment:
-
-```bash
-darwin serve status --name iris-spark-classifier --env darwin-local
 ```
 
 ---

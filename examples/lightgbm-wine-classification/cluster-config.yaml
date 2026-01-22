@@ -14,14 +14,14 @@ user: 'test@abc.com'
 head_node:
   node:
     cores: 4
-    memory: 4                     # 2GB memory
+    memory: 4                     # 4GB memory
     node_capacity_type: 'ondemand'
 
 # Worker node configuration
 worker_group:
   - node:
       cores: 2
-      memory: 2                   # 2GB memory per worker
-      node_capacity_type: 'spot'
+      memory: 4                   # 4GB memory per worker
+      node_capacity_type: 'ondemand'
     min_pods: 1                   # Minimum 1 worker
     max_pods: 2                   # Scale up to 2 workers

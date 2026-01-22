@@ -196,27 +196,31 @@ from datetime import datetime
 
 # XGBoost imports
 import xgboost as xgb
-from xgboost.spark import SparkXGBRegressor
 
-# Spark imports
+# Spark imports (for data processing only)
 from pyspark.sql import SparkSession
-from pyspark.ml.feature import VectorAssembler
-from pyspark.ml.evaluation import RegressionEvaluator
 
 # MLflow imports
 import mlflow
 import mlflow.xgboost
 from mlflow import set_tracking_uri, set_experiment
 from mlflow.client import MlflowClient
+from mlflow.models import infer_signature
 
-# Scikit-learn imports
+# Scikit-learn imports (for loading dataset and metrics)
 from sklearn.datasets import load_diabetes
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-# Darwin SDK imports
-import ray
-from darwin import init_spark_with_configs, stop_spark
-
-print("Darwin SDK available - will use distributed Spark on Darwin cluster")
+# Darwin SDK imports (optional - only available on Darwin cluster)
+DARWIN_SDK_AVAILABLE = False
+try:
+    import ray
+    from darwin import init_spark_with_configs, stop_spark
+    DARWIN_SDK_AVAILABLE = True
+    print("Darwin SDK available - will use distributed Spark on Darwin cluster")
+except ImportError as e:
+    print(f"Darwin SDK not available: {e}")
+    print("Running in LOCAL mode - will use local Spark session")
 ```
 
 **Cell 3: Initialize Spark with Darwin SDK**
@@ -225,27 +229,17 @@ print("Darwin SDK available - will use distributed Spark on Darwin cluster")
 spark_configs = {
     "spark.sql.execution.arrow.pyspark.enabled": "true",
     "spark.sql.session.timeZone": "UTC",
-    "spark.sql.shuffle.partitions": "10",
-    "spark.default.parallelism": "10",
+    "spark.sql.shuffle.partitions": "4",
+    "spark.default.parallelism": "4",
+    "spark.executor.memory": "2g",
+    "spark.executor.cores": "1",
+    "spark.driver.memory": "2g",
+    "spark.executor.instances": "2",
 }
 
 ray.init()
 spark = init_spark_with_configs(spark_configs=spark_configs)
 print(f"Spark version: {spark.version}")
-
-# Install XGBoost on executors
-def install_packages(iterator):
-    import subprocess
-    import sys
-    subprocess.check_call([sys.executable, "-m", "pip", "install", 
-                          "xgboost>=2.0.0", "scikit-learn", "pandas", "numpy",
-                          "-q", "--disable-pip-version-check"])
-    yield True
-
-num_executors = spark.sparkContext.defaultParallelism
-spark.sparkContext.parallelize(range(num_executors), num_executors) \
-    .mapPartitions(install_packages).collect()
-print(f"XGBoost installed on {num_executors} executors")
 ```
 
 **Cell 4: Setup MLflow**
@@ -253,7 +247,7 @@ print(f"XGBoost installed on {num_executors} executors")
 MLFLOW_URI = "http://darwin-mlflow-lib.darwin.svc.cluster.local:8080"
 USERNAME = "abc@gmail.com"
 PASSWORD = "password"
-EXPERIMENT_NAME = "diabetes_xgboost_spark_regression"
+EXPERIMENT_NAME = "diabetes_spark_xgboost_regression"
 MODEL_NAME = "DiabetesXGBoostRegressor"
 
 os.environ["MLFLOW_TRACKING_USERNAME"] = USERNAME
@@ -264,28 +258,33 @@ set_experiment(experiment_name=EXPERIMENT_NAME)
 print(f"MLflow configured: {MLFLOW_URI}")
 ```
 
-**Cell 5: Load and Prepare Data**
+**Cell 5: Load and Prepare Data with Spark**
 ```python
 # Load Diabetes dataset
 data = load_diabetes(as_frame=True)
 pdf = data.data.copy()
 pdf['target'] = data.target
+feature_names = data.feature_names
 
-# Convert to Spark DataFrame
-df = spark.createDataFrame(pdf)
-feature_cols = [c for c in df.columns if c != 'target']
+print(f"Dataset: Diabetes")
+print(f"Samples: {len(pdf):,}")
+print(f"Features: {len(feature_names)}")
 
-# Assemble features
-assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
-df = assembler.transform(df)
+# Use Spark for distributed data splitting (demonstrates Spark processing)
+print("\nUsing Spark for distributed data splitting...")
+spark_df = spark.createDataFrame(pdf)
+train_spark, test_spark = spark_df.randomSplit([0.8, 0.2], seed=42)
 
-# Split data
-train_df, test_df = df.randomSplit([0.8, 0.2], seed=42)
-print(f"Train samples: {train_df.count()}, Test samples: {test_df.count()}")
-print(f"Target range: {pdf['target'].min():.1f} - {pdf['target'].max():.1f}")
+# Collect to pandas for XGBoost training
+print("Collecting to pandas for training...")
+train_pdf = train_spark.toPandas()
+test_pdf = test_spark.toPandas()
+
+print(f"\nTrain samples: {len(train_pdf):,}")
+print(f"Test samples: {len(test_pdf):,}")
 ```
 
-**Cell 6: Train Model**
+**Cell 6: Train Model with Native XGBoost**
 ```python
 # Define hyperparameters
 hyperparams = {
@@ -298,44 +297,65 @@ hyperparams = {
     "random_state": 42
 }
 
-# Create SparkXGBRegressor
-xgb_regressor = SparkXGBRegressor(
-    features_col="features",
-    label_col="target",
-    prediction_col="prediction",
-    objective="reg:squarederror",
-    max_depth=hyperparams["max_depth"],
-    learning_rate=hyperparams["learning_rate"],
-    n_estimators=hyperparams["n_estimators"],
-    subsample=hyperparams["subsample"],
-    colsample_bytree=hyperparams["colsample_bytree"],
-    random_state=hyperparams["random_state"],
-)
+# Prepare data for XGBoost
+X_train = train_pdf[feature_names].values
+y_train = train_pdf["target"].values
+X_test = test_pdf[feature_names].values
+y_test = test_pdf["target"].values
 
-with mlflow.start_run(run_name=f"spark_xgboost_diabetes_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
-    # Train model (distributed)
-    model = xgb_regressor.fit(train_df)
-    print("Model trained!")
+with mlflow.start_run(run_name=f"xgboost_diabetes_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+    # Create DMatrix for XGBoost
+    dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=list(feature_names))
+    dtest = xgb.DMatrix(X_test, label=y_test, feature_names=list(feature_names))
     
-    # Evaluate
-    test_pred = model.transform(test_df)
-    evaluator = RegressionEvaluator(labelCol="target", predictionCol="prediction")
-    rmse = evaluator.setMetricName("rmse").evaluate(test_pred)
-    mae = evaluator.setMetricName("mae").evaluate(test_pred)
-    r2 = evaluator.setMetricName("r2").evaluate(test_pred)
+    # XGBoost parameters
+    params = {
+        "objective": hyperparams["objective"],
+        "max_depth": hyperparams["max_depth"],
+        "learning_rate": hyperparams["learning_rate"],
+        "subsample": hyperparams["subsample"],
+        "colsample_bytree": hyperparams["colsample_bytree"],
+        "seed": hyperparams["random_state"],
+    }
+    
+    # Train model
+    print("Training XGBoost model...")
+    model = xgb.train(
+        params,
+        dtrain,
+        num_boost_round=hyperparams["n_estimators"],
+        evals=[(dtrain, "train"), (dtest, "test")],
+        verbose_eval=False
+    )
+    print("Training completed!")
+    
+    # Make predictions
+    y_test_pred = model.predict(dtest)
+    
+    # Calculate metrics
+    rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
+    mae = mean_absolute_error(y_test, y_test_pred)
+    r2 = r2_score(y_test, y_test_pred)
     
     # Log to MLflow
     mlflow.log_params(hyperparams)
+    mlflow.log_param("training_framework", "xgboost")
+    mlflow.log_param("data_processing", "spark")
     mlflow.log_metric("test_rmse", rmse)
     mlflow.log_metric("test_mae", mae)
     mlflow.log_metric("test_r2", r2)
     
-    # Save model artifacts
-    native_model = model.get_booster()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        model_file = os.path.join(tmpdir, "model.json")
-        native_model.save_model(model_file)
-        mlflow.log_artifact(model_file, artifact_path="model")
+    # Log XGBoost model
+    sample_input = pd.DataFrame([X_train[0]], columns=feature_names)
+    sample_output = pd.DataFrame({"prediction": [0.0]})
+    signature = infer_signature(sample_input, sample_output)
+    
+    mlflow.xgboost.log_model(
+        xgb_model=model,
+        artifact_path="model",
+        signature=signature,
+        input_example=sample_input
+    )
     
     run_id = mlflow.active_run().info.run_id
     experiment_id = mlflow.active_run().info.experiment_id
@@ -370,7 +390,11 @@ print(f"\nModel URI for deployment: models:/{MODEL_NAME}/{result.version}")
 
 **Cell 8: Cleanup Spark**
 ```python
-stop_spark()
+# Cleanup: Stop Spark session properly
+if DARWIN_SDK_AVAILABLE:
+    stop_spark()
+else:
+    spark.stop()
 print("Spark session stopped")
 ```
 
@@ -429,11 +453,6 @@ Before using serve commands, configure your authentication token:
 darwin serve configure
 ```
 
-This will prompt you for a token. Use the default token for local development:
-```
-admin-token-default-change-in-production
-```
-
 ---
 
 ## Step 10: Create Serve Environment
@@ -483,14 +502,6 @@ darwin serve deploy-model \
   --max-replicas 3
 ```
 
-Check deployment status:
-
-```bash
-darwin serve status --name diabetes-xgboost-regressor --env darwin-local
-```
-
-Wait until the status shows `RUNNING` (deployment status).
-
 ---
 
 ## Step 13: Test Inference
@@ -500,7 +511,7 @@ Test the deployed model with sample requests:
 **Using curl:**
 
 ```bash
-curl -X POST http://localhost/serve/diabetes-xgboost-regressor/predict \
+curl -X POST http://localhost/diabetes-xgboost-regressor/predict \
   -H "Content-Type: application/json" \
   -d @examples/xgboost-diabetes-regression/sample-request.json
 ```
@@ -509,20 +520,18 @@ curl -X POST http://localhost/serve/diabetes-xgboost-regressor/predict \
 
 ```json
 {
-  "instances": [
-    {
-      "age": 0.0380759064,
-      "sex": 0.0506801187,
-      "bmi": 0.0616962065,
-      "bp": 0.0218723550,
-      "s1": -0.0442234984,
-      "s2": -0.0348207628,
-      "s3": -0.0434008457,
-      "s4": -0.0025945987,
-      "s5": 0.0199084209,
-      "s6": -0.0176461252
-    }
-  ]
+  "features": {
+    "age": 0.0380759064,
+    "sex": 0.0506801187,
+    "bmi": 0.0616962065,
+    "bp": 0.0218723550,
+    "s1": -0.0442234984,
+    "s2": -0.0348207628,
+    "s3": -0.0434008457,
+    "s4": -0.0025945987,
+    "s5": 0.0199084209,
+    "s6": -0.0176461252
+  }
 }
 ```
 
@@ -530,10 +539,8 @@ curl -X POST http://localhost/serve/diabetes-xgboost-regressor/predict \
 
 ```json
 {
-  "predictions": [
-    {
-      "predicted_progression": 151.34
-    }
+  "scores": [
+    151.34
   ]
 }
 ```
@@ -542,10 +549,10 @@ curl -X POST http://localhost/serve/diabetes-xgboost-regressor/predict \
 
 ```bash
 # Lower risk patient
-curl -X POST http://localhost/serve/diabetes-xgboost-regressor/predict \
+curl -X POST http://localhost/diabetes-xgboost-regressor/predict \
   -H "Content-Type: application/json" \
   -d '{
-    "instances": [{
+    "features": {
       "age": -0.0018820165,
       "sex": -0.0446416365,
       "bmi": -0.0514740612,
@@ -556,14 +563,14 @@ curl -X POST http://localhost/serve/diabetes-xgboost-regressor/predict \
       "s4": -0.0394933829,
       "s5": -0.0683297436,
       "s6": -0.0922040496
-    }]
+    }
   }'
 
 # Higher risk patient
-curl -X POST http://localhost/serve/diabetes-xgboost-regressor/predict \
+curl -X POST http://localhost/diabetes-xgboost-regressor/predict \
   -H "Content-Type: application/json" \
   -d '{
-    "instances": [{
+    "features": {
       "age": 0.0852989063,
       "sex": 0.0506801187,
       "bmi": 0.0444512133,
@@ -574,7 +581,7 @@ curl -X POST http://localhost/serve/diabetes-xgboost-regressor/predict \
       "s4": -0.0025945987,
       "s5": 0.0286297373,
       "s6": -0.0259303389
-    }]
+    }
   }'
 ```
 
@@ -586,12 +593,6 @@ When done, undeploy the serve application:
 
 ```bash
 darwin serve undeploy-model --serve-name diabetes-xgboost-regressor --env darwin-local
-```
-
-Verify undeployment:
-
-```bash
-darwin serve status --name diabetes-xgboost-regressor --env darwin-local
 ```
 
 ---
