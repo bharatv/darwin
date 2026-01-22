@@ -378,7 +378,7 @@ Each team member should verify:
 - [ ] Create Ray cluster via Compute API
 - [ ] Run job on Ray cluster
 - [ ] Log experiment to MLflow
-- [ ] Deploy model via Hermes CLI
+- [ ] Deploy model via Darwin CLI
 - [ ] Inference endpoint responds correctly
 
 **Artifact Verification**

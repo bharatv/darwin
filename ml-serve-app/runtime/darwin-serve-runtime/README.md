@@ -65,16 +65,18 @@ The runtime is configured via environment variables:
 
 ### One-Click Deployment
 
-This image is automatically used when deploying models via:
+This image is automatically used when deploying models via Darwin CLI:
 
 ```bash
-hermes deploy-model \
+darwin serve deploy-model \
   --serve-name my-model \
   --model-uri models:/my-model/Production \
   --artifact-version v1 \
   --cores 4 \
   --memory 8
 ```
+
+> **📖 For complete Serve CLI documentation, see [darwin-cli/README.md#serve-commands](../../../darwin-cli/README.md#serve-commands)**
 
 ### Custom Deployment
 

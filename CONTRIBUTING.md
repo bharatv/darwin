@@ -111,7 +111,8 @@ darwin/
 ├── chronos/                    # Event processing (Python)
 ├── workspace/                  # Project management (Python)
 ├── darwin-catalog/             # Data catalog (Java/Spring Boot)
-├── hermes-cli/                 # CLI tool (Python/Typer)
+├── hermes-cli/                 # Serve CLI backend (Python/Typer)
+├── darwin-cli/                 # Unified CLI for all services (Python/Typer)
 ├── helm/                       # Helm charts
 │   └── darwin/                 # Umbrella chart
 │       ├── charts/datastores/  # MySQL, Cassandra, Kafka, etc.
@@ -808,7 +809,7 @@ Any special deployment considerations?
 - Validate Helm values generation
 
 **Breaking Change Checklist**:
-- [ ] Hermes CLI updated
+- [ ] Darwin CLI updated
 - [ ] Deployment configs migrated
 - [ ] Active deployments not affected
 
@@ -1055,33 +1056,33 @@ curl --location --request POST 'http://localhost/compute/cluster/stop-cluster/{c
 kubectl get rayclusters -n ray  # Should be deleted
 ```
 
-#### Test Complete Workflow: Model Deployment via Hermes CLI
+#### Test Complete Workflow: Model Deployment via Darwin CLI
 
-For complete Hermes CLI documentation, see [hermes-cli/CLI.md](hermes-cli/CLI.md)
+For complete Darwin CLI documentation, see [darwin-cli/README.md#serve-commands](darwin-cli/README.md#serve-commands)
 
 ```bash
-# 1. Setup Hermes CLI
-source hermes-cli/.venv/bin/activate
+# 1. Setup Darwin CLI
+source .venv/bin/activate
 
-# 2. Configure authentication
-export HERMES_USER_TOKEN=admin-token-default-change-in-production
-hermes configure
+# 2. Configure environment and authentication
+darwin config set --env darwin-local
+darwin serve configure
 
 # 3. Create environment (if not already created)
-hermes create-environment \
+darwin serve environment create \
   --name local \
   --domain-suffix .local \
   --cluster-name kind
 
 # 4. Create serve
-hermes create-serve \
+darwin serve create \
   --name test-model \
   --type api \
   --space serve \
   --description "Test model deployment"
 
 # 5. Deploy model
-hermes deploy-model \
+darwin serve deploy-model \
   --serve-name test-model \
   --artifact-version v1 \
   --model-uri mlflow-artifacts:/1/abc123/artifacts/model \
@@ -1105,7 +1106,7 @@ curl -X POST http://localhost/serve/test-model/predict \
 kubectl get hpa -n serve
 
 # 9. Cleanup (undeploy model)
-hermes undeploy-model --serve-name test-model
+darwin serve undeploy --name test-model --env darwin-local
 
 # 10. Verify cleanup
 kubectl get deployments -n serve  # test-model should be gone
@@ -1274,7 +1275,7 @@ Any other information.
 - **Documentation**: Check service-specific READMEs in each submodule
 - **Existing Issues**: Search GitHub issues for similar questions
 - **Code Examples**: Check `examples/` directory
-- **Hermes CLI**: See [hermes-cli/CLI.md](hermes-cli/CLI.md) for complete CLI documentation
+- **Darwin CLI**: See [darwin-cli/README.md](darwin-cli/README.md) for complete CLI documentation
 
 ### Asking Questions
 
@@ -1304,7 +1305,7 @@ Any other information.
    - `mlflow/README.md`
    - `ml-serve-app/README.md`
    - `chronos/README.md`
-4. Review Hermes CLI documentation: `hermes-cli/CLI.md`
+4. Review Darwin CLI documentation: `darwin-cli/README.md`
 
 ### Technology-Specific Resources
 
