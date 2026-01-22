@@ -266,7 +266,7 @@ jobs:
           
           - name: ray-darwin-sdk
             dockerfile: darwin-compute/runtimes/cpu/New-Lightweight/Ray2.37_Py3.10_Spark3.5.0_DarwinSDK/Dockerfile
-            context: darwin-compute/runtimes/cpu/New-Lightweight/Ray2.37_Py3.10_Spark3.5.0_DarwinSDK
+            context: .
             image: ray:2.37.0-darwin-sdk
           
           - name: serve-runtime
