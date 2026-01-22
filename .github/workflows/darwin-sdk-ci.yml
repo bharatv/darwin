@@ -119,8 +119,8 @@ jobs:
 
       - name: Setup Darwin Platform (setup.sh)
         run: |
-          echo "Running setup.sh -y to build images and start Kind cluster..."
-          ./setup.sh -y
+          echo "Running setup.sh -y -d to build images locally and start Kind cluster..."
+          ./setup.sh -y -d
         timeout-minutes: 30
 
       - name: Start Darwin Platform (start.sh)

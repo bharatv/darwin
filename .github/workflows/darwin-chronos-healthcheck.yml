@@ -124,7 +124,7 @@ jobs:
           df -h
           
           export ENV=local
-          ./setup.sh -y
+          ./setup.sh -y -d
           
           if [ -f $CONFIG_ENV ]; then
             echo "config.env exists"

@@ -154,7 +154,7 @@ class TestOneClickDeploymentFlow:
         
         assert response.status_code == 200
         data = response.json()
-        assert data.get("status") in ["healthy", "ok"]
+        assert data.get("status") in ["SUCCESS"]
     
     @pytest.mark.asyncio
     async def test_create_and_list_environments(

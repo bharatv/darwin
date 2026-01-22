@@ -85,7 +85,7 @@ jobs:
         run: ./init.sh --dev-mode --all
 
       - name: Setup Darwin platform (build images and create cluster)
-        run: ./setup.sh -y
+        run: ./setup.sh -y -d
 
       - name: Deploy Darwin platform
         run: ./start.sh

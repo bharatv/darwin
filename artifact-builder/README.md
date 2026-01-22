@@ -20,7 +20,7 @@ This service is designed to be deployed as part of the **Darwin** ecosystem. The
 ```
 Darwin Workflow:
 1. init.sh      → Select which services to enable (enable artifact-builder)
-2. setup.sh     → Build images, push to kind-registry (localhost:5000)
+2. setup.sh     → Get images (pull release or build with -d), push to kind-registry
 3. start.sh     → Deploy to kind cluster via Helm
 
 Image Building Flow (triggered by ML Serve App):
@@ -190,8 +190,10 @@ From the Darwin root directory:
 # 1. Configure which services to enable (enable artifact-builder)
 ./init.sh
 
-# 2. Build all images and set up the kind cluster
-./setup.sh
+# 2. Set up the kind cluster and get images
+./setup.sh        # Pull release images (default)
+# OR for development:
+# ./setup.sh -d   # Build images locally
 
 # 3. Deploy to Kubernetes
 ./start.sh
@@ -240,7 +242,7 @@ localhost:5000/serve-app:v1.0.0
 
 ## Kind Registry (Local Container Registry)
 
-When running in the Darwin ecosystem, a local container registry (`kind-registry`) is automatically created during `setup.sh`. This registry:
+When running in the Darwin ecosystem, a local container registry (`kind-registry`) is automatically created during `setup.sh` (regardless of pull or build mode). This registry:
 
 - Runs as a Docker container on the host machine
 - Is accessible at a dynamically assigned port (stored in `.setup/config.env`)

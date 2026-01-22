@@ -106,7 +106,7 @@ jobs:
         run: |
           echo "🔨 Running setup.sh..."
           export ENV=local
-          ./setup.sh -y
+          ./setup.sh -y -d
 
           if [ -f $CONFIG_ENV ]; then
             echo "✅ config.env created:"

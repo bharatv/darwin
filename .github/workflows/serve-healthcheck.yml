@@ -126,13 +126,13 @@ jobs:
           cat .setup/enabled-services.yaml
       - name: Step 2 - Build images and setup cluster (setup.sh)
         run: |
-          echo "🔨 Step 2: Running setup.sh to build images and setup cluster..."
+          echo "🔨 Step 2: Running setup.sh to build images locally and setup cluster..."
 
           # Ensure ENV is set to local for cluster creation
           export ENV=local
-          # Run setup.sh with auto-yes flag (it will auto-answer yes to cluster setup and clean build)
+          # Run setup.sh with auto-yes flag and dev mode to build locally
           # setup.sh will handle errors gracefully - if cluster creation fails but KUBECONFIG exists, it will continue
-          ./setup.sh -y
+          ./setup.sh -y -d
 
           # Verify config.env was created (setup.sh should create it at project root)
           echo "🔍 Verifying config.env was created..."
