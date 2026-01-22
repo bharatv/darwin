@@ -245,7 +245,7 @@ MLflow models can be deployed to production using ML Serve. The deployment proce
 
 > **💡 For complete deployment documentation, examples, and CLI commands**, see:
 > - [ML Serve Documentation](../ml-serve-app/README.md)
-> - [Hermes CLI Documentation](../hermes-cli/CLI.md)
+> - [Darwin CLI Documentation](../darwin-cli/README.md#serve-commands)
 > - [Examples](../examples/) directory
 
 ## 🔄 Complete End-to-End Workflow
@@ -295,7 +295,7 @@ sequenceDiagram
 - Extract the model URI in the format: `mlflow-artifacts:/{experiment_id}/{run_id}/artifacts/model`
 - This URI can be used to deploy the model to production
 
-> **💡 For deployment steps (Steps 5-7)**, see [ML Serve Documentation](../ml-serve-app/README.md) and [Hermes CLI Documentation](../hermes-cli/CLI.md)
+> **💡 For deployment steps (Steps 5-7)**, see [ML Serve Documentation](../ml-serve-app/README.md) and [Darwin CLI Documentation](../darwin-cli/README.md#serve-commands)
 
 > **💡 For complete step-by-step examples with full code**, see [`examples/`](../examples/)
 
@@ -502,7 +502,7 @@ When deploying models to ML Serve, use the following URI format:
 For deploying MLflow models to production, see:
 - [Deploying Models from MLflow to Serve](#deploying-models-from-mlflow-to-serve)
 - [ML Serve Documentation](../ml-serve-app/README.md)
-- [Hermes CLI Documentation](../hermes-cli/CLI.md)
+- [Darwin CLI Documentation](../darwin-cli/README.md#serve-commands)
 
 
 ## 🛠️ Configuration

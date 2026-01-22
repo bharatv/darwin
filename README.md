@@ -25,7 +25,7 @@ Darwin solves critical challenges in production ML infrastructure:
 graph TB
     subgraph "User Interface Layer"
         UI[Workspace UI/Jupyter]
-        CLI[Hermes CLI]
+        CLI[Darwin CLI]
         SDK[Python SDKs]
     end
 
@@ -185,21 +185,23 @@ features = fs.fetch_features(
 - **Feature Store Integration**: Native integration for online feature retrieval
 
 **Deployment Workflow**:
-```bash
-# Complete model deployment via Hermes CLI
 
-# 1. Configure authentication
-export HERMES_USER_TOKEN=admin-token-default-change-in-production
-hermes configure
+```bash
+# Complete model deployment via Darwin CLI
+
+# 1. Configure environment and authentication
+source .venv/bin/activate
+darwin config set --env darwin-local
+darwin serve configure  # Uses default token for darwin-local
 
 # 2. Create environment (one-time setup)
-hermes create-environment --name local --domain-suffix .local --cluster-name kind
+darwin serve environment create --name local --domain-suffix .local --cluster-name kind
 
 # 3. Create serve definition
-hermes create-serve --name my-model --type api --space serve --description "My ML model"
+darwin serve create --name my-model --type api --space serve --description "My ML model"
 
 # 4. Deploy model
-hermes deploy-model \
+darwin serve deploy-model \
   --serve-name my-model \
   --artifact-version v1 \
   --model-uri mlflow-artifacts:/1/abc123/artifacts/model \
@@ -210,7 +212,7 @@ hermes deploy-model \
   --max-replicas 10
 ```
 
-> **📖 For detailed Hermes CLI commands and options, see [hermes-cli/CLI.md](hermes-cli/CLI.md)**
+> **📖 For complete Serve CLI commands and deployment options, see [darwin-cli/README.md#serve-commands](darwin-cli/README.md#serve-commands)**
 
 ---
 
@@ -328,33 +330,18 @@ client.trigger_workflow(workflow_id=workflow['id'])
 
 ---
 
-### 11. Hermes CLI
-**Command-line tool for streamlined ML operations**
+### 11. Darwin CLI
+**Unified command-line interface for all Darwin ML Platform services**
 
-- Environment configuration and management
-- Model serving project scaffolding (FastAPI templates)
-- One-click model deployment
-- Artifact build and deploy orchestration
-- Configuration management (`.hermes` folder)
+- Compute cluster management
+- Workspace and codespace operations
+- Model serving deployment (Serve)
+- MLflow experiment tracking
+- Feature Store operations
+- Catalog and lineage queries
+- Workflow orchestration
 
-**Installation & Setup**:
-```bash
-# Included with Darwin Distribution
-source hermes-cli/.venv/bin/activate
-
-# Configure authentication
-export HERMES_USER_TOKEN=admin-token-default-change-in-production
-hermes configure
-
-# Create environment (one-time setup per environment)
-hermes create-environment \
-  --name local \
-  --domain-suffix .local \
-  --cluster-name kind \
-  --namespace serve
-```
-
-> **📖 For complete Hermes CLI documentation, see [hermes-cli/CLI.md](hermes-cli/CLI.md)**
+> **📖 For complete Darwin CLI documentation and all available commands, see [darwin-cli/README.md](darwin-cli/README.md)**
 
 ---
 
@@ -365,7 +352,7 @@ hermes create-environment \
 - Launch Ray clusters via SDK for distributed training
 - Track experiments with MLflow
 - Access features from Feature Store
-- Deploy models with one-click Hermes CLI commands
+- Deploy models with Darwin CLI serve commands
 
 ### ML Engineers
 **Use Darwin for**: Production model deployment and monitoring
@@ -540,25 +527,27 @@ cluster.stop(cluster_id)
 ### Quick Start: Deploy a Model
 
 ```bash
-# Activate Hermes CLI
-source hermes-cli/.venv/bin/activate
+# Activate Darwin CLI
+source .venv/bin/activate
 
-# 1. Configure Hermes CLI with authentication token
-export HERMES_USER_TOKEN=admin-token-default-change-in-production
-hermes configure
+# 1. Configure Darwin CLI
+darwin config set --env darwin-local
 
-# 2. Create environment
-hermes create-environment --name local --domain-suffix .local --cluster-name kind
+# 2. Configure Serve authentication (uses default token for darwin-local)
+darwin serve configure
 
-# 3. Create serve
-hermes create-serve \
+# 3. Create environment
+darwin serve environment create --name local --domain-suffix .local --cluster-name kind
+
+# 4. Create serve
+darwin serve create \
   --name iris-classifier \
   --type api \
   --space serve \
   --description "Iris classification model"
 
-# 4. Deploy model (one-click)
-hermes deploy-model \
+# 5. Deploy model
+darwin serve deploy-model \
   --serve-name iris-classifier \
   --artifact-version v1 \
   --model-uri mlflow-artifacts:/1/2b2b1b5727a14c5ca81b44e899979745/artifacts/model \
@@ -568,13 +557,13 @@ hermes deploy-model \
   --min-replicas 1 \
   --max-replicas 2
 
-# 5. Make predictions
+# 6. Make predictions
 curl -X POST http://localhost/iris-classifier/predict \
   -H "Content-Type: application/json" \
   -d '{"features": [[5.1, 3.5, 1.4, 0.2]]}'
 ```
 
-> **📖 For more deployment options, see [hermes-cli/CLI.md](hermes-cli/CLI.md)**
+> **📖 For complete Serve CLI documentation, see [darwin-cli/README.md#serve-commands](darwin-cli/README.md#serve-commands)**
 
 ### 📚 Complete End-to-End Examples
 
@@ -911,32 +900,32 @@ http://localhost/mlflow-app/experiments
 
 Navigate to your experiment to see the registered model with metrics and parameters.
 
-### 🚀 6) Deploy with Hermes CLI
+### 🚀 6) Deploy with Darwin CLI
 
 Deploy your trained model (replace `<experiment_id>` and `<run_id>` with values from MLflow UI):
 
 > **📖 Sample training script for house price prediction: [examples/house-price-prediction/train_house_pricing_model.ipynb](examples/house-price-prediction/train_house_pricing_model.ipynb)**
 
 ```bash
-# Activate Hermes CLI
-source hermes-cli/.venv/bin/activate
+# Activate Darwin CLI
+source .venv/bin/activate
 
-# 1. Configure Hermes CLI with authentication token (one-time)
-export HERMES_USER_TOKEN=admin-token-default-change-in-production
-hermes configure
+# 1. Configure Darwin CLI (one-time)
+darwin config set --env darwin-local
+darwin serve configure
 
 # 2. Create environment
-hermes create-environment --name local --domain-suffix .local --cluster-name kind
+darwin serve environment create --name local --domain-suffix .local --cluster-name kind
 
 # 3. Create serve
-hermes create-serve \
+darwin serve create \
   --name housing-model \
   --type api \
   --space serve \
   --description "House Price Prediction model"
 
-# 4. Deploy model (one-click)
-hermes deploy-model \
+# 4. Deploy model
+darwin serve deploy-model \
   --serve-name housing-model \
   --artifact-version v1 \
   --model-uri mlflow-artifacts:/1/<experiment_id>/<run_id>/artifacts/model \
@@ -946,6 +935,8 @@ hermes deploy-model \
   --min-replicas 1 \
   --max-replicas 2
 ```
+
+> **📖 For complete Serve CLI documentation, see [darwin-cli/README.md#serve-commands](darwin-cli/README.md#serve-commands)**
 
 ### 🌐 7) Test Your Endpoint
 
@@ -1018,7 +1009,7 @@ sequenceDiagram
     FS-->>DS: Feature dataset
     DS->>Compute: Train model (Ray/Spark)
     DS->>MLflow: Log experiment + model
-    DS->>Serve: Deploy model (Hermes CLI)
+    DS->>Serve: Deploy model (Darwin CLI)
     Serve->>MLflow: Fetch model artifact
     Serve->>FS: Configure feature retrieval
     Serve-->>DS: Inference endpoint
@@ -1254,7 +1245,8 @@ darwin-distro/
 ├── workspace/               # Project & codespace management
 ├── darwin-catalog/          # Data catalog & lineage
 ├── darwin-sdk/              # Platform SDK with Spark integration
-├── hermes-cli/              # CLI tool for deployments
+├── hermes-cli/              # Serve CLI backend (used by darwin-cli)
+├── darwin-cli/              # Unified CLI for all Darwin services
 ├── helm/                    # Helm charts for deployment
 │   └── darwin/              # Umbrella chart
 │       ├── charts/

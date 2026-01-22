@@ -152,16 +152,17 @@ chronos-consumer       → chronos
 
 ## 🛠️ CLI Tools
 
-### Hermes CLI
-Command-line tool for model deployment:
+### Darwin CLI
+Unified command-line interface for all Darwin services:
 ```bash
-source hermes-cli/.venv/bin/activate
-hermes configure
-hermes create-serve --name my-model --type api --space serve
-hermes deploy-model --serve-name my-model --model-uri mlflow-artifacts:/...
+source .venv/bin/activate
+darwin config set --env darwin-local
+darwin serve configure
+darwin serve create --name my-model --type api --space serve
+darwin serve deploy-model --serve-name my-model --model-uri mlflow-artifacts:/...
 ```
 
-> 📖 Full documentation: `hermes-cli/CLI.md`
+> 📖 Full documentation: [darwin-cli/README.md](darwin-cli/README.md)
 
 ---
 
@@ -182,7 +183,7 @@ Darwin SDK Runtime includes Spark integration for distributed data processing.
 | Document | Location |
 |----------|----------|
 | Main README | `README.md` |
-| Hermes CLI | `hermes-cli/CLI.md` |
+| Darwin CLI | `darwin-cli/README.md` |
 | Helm Umbrella Chart | `helm/darwin/UMBRELLA_CHART.md` |
 | Deployment Order | `helm/darwin/DEPLOYMENT_ORDER.md` |
 | Feature Store Architecture | `feature-store/ARCHITECTURE.md` |
@@ -229,4 +230,4 @@ AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test aws s3 ls --endpoint-url=http:
 | **Enable/disable service** | Edit `.setup/enabled-services.yaml` → Run `./start.sh` |
 | **Rebuild images** | Run `./setup.sh -y` |
 | **Debug pod** | `kubectl logs/describe` → Check service dependencies |
-| **Deploy model** | Use Hermes CLI (see `hermes-cli/CLI.md`) |
+| **Deploy model** | Use Darwin CLI (see `darwin-cli/README.md#serve-commands`) |
