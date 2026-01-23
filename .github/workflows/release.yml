@@ -279,7 +279,7 @@ jobs:
           - name: serve-runtime
             dockerfile: ml-serve-app/runtime/darwin-serve-runtime/Dockerfile
             context: ml-serve-app/runtime/darwin-serve-runtime
-            image: serve-md-runtime:latest
+            image: serve-md-runtime
     
     steps:
       - uses: actions/checkout@v4

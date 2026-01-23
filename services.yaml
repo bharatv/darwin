@@ -178,7 +178,7 @@ darwin-sdk-runtime:
   registry: localhost:5000
 
 serve-images:
-  - image-name: serve-md-runtime-latest:latest
+  - image-name: serve-md-runtime:latest
     dockerfile-path: ml-serve-app/runtime/darwin-serve-runtime
     registry: localhost:5000
 
