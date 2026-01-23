@@ -77,7 +77,7 @@ jobs:
           allow: network.host
           tags: |
             ${{ env.ORG_NAME }}/${{ matrix.base.image }}-${{ steps.version.outputs.version }}
-            ${{ github.event_name == 'release' && format('{0}/{1}', env.ORG_NAME, matrix.base.image) || '' }}
+            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, matrix.base.image) || '' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.base.name }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -316,7 +316,7 @@ jobs:
           allow: network.host
           tags: |
             ${{ env.ORG_NAME }}/${{ matrix.runtime.image }}-${{ steps.version.outputs.version }}
-            ${{ github.event_name == 'release' && format('{0}/{1}', env.ORG_NAME, matrix.runtime.image) || '' }}
+            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, matrix.runtime.image) || '' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.runtime.name }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -377,10 +377,12 @@ jobs:
           cat runtime-results.txt 2>/dev/null >> all-results.txt || true
           
           # Count successes and failures with safer logic
-          SUCCESS_COUNT=$(grep -c "✅" all-results.txt 2>/dev/null || echo "0")
-          FAILURE_COUNT=$(grep -c "❌" all-results.txt 2>/dev/null || echo "0")
+          SUCCESS_COUNT=$(grep -c "✅" all-results.txt 2>/dev/null) || SUCCESS_COUNT=0
+          FAILURE_COUNT=$(grep -c "❌" all-results.txt 2>/dev/null) || FAILURE_COUNT=0
           
-          # Ensure we have valid integers
+          # Ensure we have valid integers (strip any whitespace/newlines)
+          SUCCESS_COUNT=$(echo "$SUCCESS_COUNT" | tr -d '[:space:]')
+          FAILURE_COUNT=$(echo "$FAILURE_COUNT" | tr -d '[:space:]')
           SUCCESS_COUNT=${SUCCESS_COUNT:-0}
           FAILURE_COUNT=${FAILURE_COUNT:-0}
           TOTAL_COUNT=$((SUCCESS_COUNT + FAILURE_COUNT))
