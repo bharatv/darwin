@@ -84,7 +84,7 @@ jobs:
           allow: network.host
           tags: |
             ${{ env.ORG_NAME }}/${{ steps.image_name.outputs.name }}:${{ steps.version.outputs.version }}
-            ${{ env.ORG_NAME }}/${{ steps.image_name.outputs.name }}:latest
+            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, steps.image_name.outputs.name) || '' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.base.name }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -224,7 +224,7 @@ jobs:
           allow: network.host
           tags: |
             ${{ env.ORG_NAME }}/${{ matrix.service.name }}:${{ steps.version.outputs.version }}
-            ${{ env.ORG_NAME }}/${{ matrix.service.name }}:latest
+            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, matrix.service.name) || '' }}
           build-args: |
             BASE_IMAGE=${{ env.ORG_NAME }}/${{ matrix.service.base-image }}
             APP_NAME=${{ matrix.service.name }}
@@ -330,7 +330,7 @@ jobs:
           allow: network.host
           tags: |
             ${{ env.ORG_NAME }}/${{ steps.image_name.outputs.name }}:${{ steps.version.outputs.version }}
-            ${{ env.ORG_NAME }}/${{ steps.image_name.outputs.name }}:latest
+            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, steps.image_name.outputs.name) || '' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.runtime.name }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
