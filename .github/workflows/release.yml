@@ -64,6 +64,13 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
       
+      - name: Transform base image name for tagging
+        id: image_name
+        run: |
+          # Replace colon with dash (e.g., "golang:1.18-bookworm-slim" -> "golang-1.18-bookworm-slim")
+          IMAGE_NAME=$(echo "${{ matrix.base.image }}" | tr ':' '-')
+          echo "name=$IMAGE_NAME" >> $GITHUB_OUTPUT
+      
       - name: Build and push ${{ matrix.base.name }}
         id: build
         continue-on-error: true
@@ -76,8 +83,8 @@ jobs:
           network: host
           allow: network.host
           tags: |
-            ${{ env.ORG_NAME }}/${{ matrix.base.image }}-${{ steps.version.outputs.version }}
-            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, matrix.base.image) || '' }}
+            ${{ env.ORG_NAME }}/${{ steps.image_name.outputs.name }}:${{ steps.version.outputs.version }}
+            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, steps.image_name.outputs.name) || '' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.base.name }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -272,7 +279,7 @@ jobs:
           - name: serve-runtime
             dockerfile: ml-serve-app/runtime/darwin-serve-runtime/Dockerfile
             context: ml-serve-app/runtime/darwin-serve-runtime
-            image: serve-md-runtime:latest
+            image: serve-md-runtime
     
     steps:
       - uses: actions/checkout@v4
@@ -287,6 +294,13 @@ jobs:
             VERSION="${{ github.event.inputs.version }}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Transform runtime image name for tagging
+        id: image_name
+        run: |
+          # Replace colon with dash (e.g., "ray:2.37.0" -> "ray-2.37.0")
+          IMAGE_NAME=$(echo "${{ matrix.runtime.image }}" | tr ':' '-')
+          echo "name=$IMAGE_NAME" >> $GITHUB_OUTPUT
       
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -315,8 +329,8 @@ jobs:
           network: host
           allow: network.host
           tags: |
-            ${{ env.ORG_NAME }}/${{ matrix.runtime.image }}-${{ steps.version.outputs.version }}
-            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, matrix.runtime.image) || '' }}
+            ${{ env.ORG_NAME }}/${{ steps.image_name.outputs.name }}:${{ steps.version.outputs.version }}
+            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.ORG_NAME, steps.image_name.outputs.name) || '' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.runtime.name }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
