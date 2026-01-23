@@ -77,7 +77,7 @@ jobs:
           allow: network.host
           tags: |
             ${{ env.ORG_NAME }}/${{ matrix.base.image }}-${{ steps.version.outputs.version }}
-            ${{ env.ORG_NAME }}/${{ matrix.service.name }}:latest
+            ${{ env.ORG_NAME }}/${{ matrix.base.image }}:latest
           labels: |
             org.opencontainers.image.title=${{ matrix.base.name }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
@@ -316,7 +316,7 @@ jobs:
           allow: network.host
           tags: |
             ${{ env.ORG_NAME }}/${{ matrix.runtime.image }}-${{ steps.version.outputs.version }}
-            ${{ env.ORG_NAME }}/${{ matrix.service.name }}:latest
+            ${{ env.ORG_NAME }}/${{ matrix.runtime.image }}:latest
           labels: |
             org.opencontainers.image.title=${{ matrix.runtime.name }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
