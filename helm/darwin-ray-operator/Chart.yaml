@@ -1,0 +1,15 @@
+apiVersion: v2
+name: darwin-ray-operator
+description: A Helm chart for Darwin Ray Operator - manages DarwinRayCluster CRDs
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - darwin
+  - ray
+  - kubernetes
+  - operator
+  - ml
+maintainers:
+  - name: Darwin Team
+home: https://github.com/darwin/darwin-ray-operator

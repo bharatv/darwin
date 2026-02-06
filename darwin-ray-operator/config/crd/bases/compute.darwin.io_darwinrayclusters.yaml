@@ -1,0 +1,368 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: darwinrayclusters.compute.darwin.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: compute.darwin.io
+  names:
+    kind: DarwinRayCluster
+    listKind: DarwinRayClusterList
+    plural: darwinrayclusters
+    singular: darwinraycluster
+    shortNames:
+      - drc
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+          description: Current phase
+        - name: User
+          type: string
+          jsonPath: .spec.user
+          description: Cluster owner
+        - name: Runtime
+          type: string
+          jsonPath: .spec.runtime
+          description: Ray runtime
+        - name: Pods
+          type: integer
+          jsonPath: .status.activePods
+          description: Active pods
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: DarwinRayCluster is the Schema for the darwinrayclusters API
+          properties:
+            apiVersion:
+              type: string
+              description: API version
+            kind:
+              type: string
+              description: Kind
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: DarwinRayClusterSpec defines the desired state
+              required:
+                - name
+                - user
+                - runtime
+                - headNode
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  description: Display name of the cluster
+                user:
+                  type: string
+                  minLength: 1
+                  description: Owner of the cluster
+                runtime:
+                  type: string
+                  description: Ray runtime version
+                cloudEnv:
+                  type: string
+                  description: Cloud environment identifier
+                labels:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: User-defined labels
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  description: User-defined tags
+                suspend:
+                  type: boolean
+                  description: Whether to suspend the cluster
+                isJobCluster:
+                  type: boolean
+                  description: Whether this is an ephemeral job cluster
+                headNode:
+                  type: object
+                  required:
+                    - resources
+                  properties:
+                    resources:
+                      type: object
+                      required:
+                        - cpu
+                        - memoryGB
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^[0-9]+(\.[0-9]+)?$'
+                        memoryGB:
+                          type: integer
+                          minimum: 1
+                        gpu:
+                          type: integer
+                        gpuType:
+                          type: string
+                    serviceAccountName:
+                      type: string
+                    enableJupyter:
+                      type: boolean
+                    volumeMounts:
+                      type: array
+                      items:
+                        type: object
+                        required:
+                          - name
+                          - mountPath
+                        properties:
+                          name:
+                            type: string
+                          mountPath:
+                            type: string
+                          pvcName:
+                            type: string
+                          configMapName:
+                            type: string
+                          secretName:
+                            type: string
+                          readOnly:
+                            type: boolean
+                    env:
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                    rayStartParams:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    nodeSelector:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    tolerations:
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                    annotations:
+                      type: object
+                      additionalProperties:
+                        type: string
+                workerGroups:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - replicas
+                      - resources
+                    properties:
+                      name:
+                        type: string
+                      replicas:
+                        type: integer
+                        minimum: 0
+                      minReplicas:
+                        type: integer
+                        minimum: 0
+                      maxReplicas:
+                        type: integer
+                      resources:
+                        type: object
+                        required:
+                          - cpu
+                          - memoryGB
+                        properties:
+                          cpu:
+                            type: string
+                            pattern: '^[0-9]+(\.[0-9]+)?$'
+                          memoryGB:
+                            type: integer
+                            minimum: 1
+                          gpu:
+                            type: integer
+                          gpuType:
+                            type: string
+                      serviceAccountName:
+                        type: string
+                      volumeMounts:
+                        type: array
+                        items:
+                          type: object
+                          required:
+                            - name
+                            - mountPath
+                          properties:
+                            name:
+                              type: string
+                            mountPath:
+                              type: string
+                            pvcName:
+                              type: string
+                            configMapName:
+                              type: string
+                            secretName:
+                              type: string
+                            readOnly:
+                              type: boolean
+                      env:
+                        type: array
+                        items:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                      rayStartParams:
+                        type: object
+                        additionalProperties:
+                          type: string
+                      nodeSelector:
+                        type: object
+                        additionalProperties:
+                          type: string
+                      tolerations:
+                        type: array
+                        items:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                      annotations:
+                        type: object
+                        additionalProperties:
+                          type: string
+                autoTermination:
+                  type: object
+                  required:
+                    - enabled
+                  properties:
+                    enabled:
+                      type: boolean
+                    idleTimeoutMinutes:
+                      type: integer
+                      minimum: 1
+                    maxRuntimeMinutes:
+                      type: integer
+                advanceConfig:
+                  type: object
+                  properties:
+                    initScript:
+                      type: string
+                    enableInTreeAutoscaling:
+                      type: boolean
+                    autoscalerOptions:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    image:
+                      type: string
+                    imagePullPolicy:
+                      type: string
+                      enum:
+                        - Always
+                        - IfNotPresent
+                        - Never
+                    imagePullSecrets:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+            status:
+              type: object
+              description: DarwinRayClusterStatus defines the observed state
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Inactive
+                    - Creating
+                    - HeadNodeUp
+                    - JupyterUp
+                    - Active
+                    - Failed
+                    - Terminating
+                activePods:
+                  type: integer
+                availableMemoryGB:
+                  type: integer
+                  format: int64
+                totalCPU:
+                  anyOf:
+                    - type: integer
+                    - type: string
+                  x-kubernetes-int-or-string: true
+                headPodIP:
+                  type: string
+                headServiceName:
+                  type: string
+                jupyterURL:
+                  type: string
+                rayDashboardURL:
+                  type: string
+                rayClusterRef:
+                  type: string
+                lastTransitionTime:
+                  type: string
+                  format: date-time
+                startedAt:
+                  type: string
+                  format: date-time
+                readyWorkers:
+                  type: integer
+                desiredWorkers:
+                  type: integer
+                observedGeneration:
+                  type: integer
+                  format: int64
+                message:
+                  type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: '^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$'
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        type: string
+                        maxLength: 316
+                        pattern: '^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$'
+                  x-kubernetes-list-map-keys:
+                    - type
+                  x-kubernetes-list-type: map

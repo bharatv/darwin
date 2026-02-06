@@ -1,0 +1,3 @@
+{{- if .Values.installCRDs -}}
+{{ .Files.Get "crds/compute.darwin.io_darwinrayclusters.yaml" }}
+{{- end }}
