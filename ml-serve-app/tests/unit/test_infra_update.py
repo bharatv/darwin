@@ -181,7 +181,7 @@ class TestAutoRedeployment:
         
         await AppLayerDeployment.create(
             deployment=deployment,
-            deployment_strategy="rolling",
+            deployment_strategy=None,  # Use immediate/traditional deployment
             environment_variables={"TEST": "value"}
         )
         
@@ -305,7 +305,7 @@ class TestAutoRedeployment:
         
         await AppLayerDeployment.create(
             deployment=deployment,
-            deployment_strategy="rolling",
+            deployment_strategy=None,  # Use immediate/traditional deployment
             environment_variables=original_env_vars
         )
         
@@ -380,7 +380,7 @@ class TestAutoRedeployment:
         
         await AppLayerDeployment.create(
             deployment=deployment,
-            deployment_strategy="rolling"
+            deployment_strategy=None  # Use immediate/traditional deployment
         )
         
         await ActiveDeployment.create(
@@ -449,7 +449,7 @@ class TestAutoRedeployment:
         
         await AppLayerDeployment.create(
             deployment=deployment,
-            deployment_strategy="rolling"
+            deployment_strategy=None  # Use immediate/traditional deployment
         )
         
         await ActiveDeployment.create(

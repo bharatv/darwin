@@ -460,6 +460,126 @@ For more control over the deployment process, use Artifact Builder to create cus
    }
    ```
 
+### Advanced Deployment Strategies
+
+Darwin ML Serve supports advanced deployment strategies for zero-downtime updates and gradual rollouts:
+
+#### Rolling Deployment (Kubernetes Native)
+
+Gradually replace old pods with new ones using Kubernetes rolling update mechanism:
+
+```bash
+POST /api/v1/serve/{serve_name}/deploy
+{
+  "env": "local",
+  "artifact_version": "v2.0.0",
+  "api_serve_deployment_config": {
+    "deployment_strategy": "rolling",
+    "deployment_strategy_config": {
+      "max_surge": "50%",
+      "max_unavailable": "25%",
+      "rolling_update_steps": 3,
+      "step_interval_seconds": 30,
+      "health_check_timeout_seconds": 60
+    },
+    "environment_variables": {
+      "MODEL_VERSION": "v2.0.0"
+    }
+  }
+}
+```
+
+**Configuration:**
+- `max_surge`: Maximum new pods to create (default: `50%`)
+- `max_unavailable`: Maximum pods that can be unavailable (default: `25%`)
+- `rolling_update_steps`: Number of batches to roll out (default: `3`)
+- `step_interval_seconds`: Wait time between batches (default: `30`)
+- `health_check_timeout_seconds`: Timeout for health checks (default: `60`)
+
+#### Canary Deployment (Progressive Traffic Split)
+
+Deploy a new version alongside the stable version and gradually shift traffic:
+
+```bash
+POST /api/v1/serve/{serve_name}/deploy
+{
+  "env": "local",
+  "artifact_version": "v2.0.0",
+  "api_serve_deployment_config": {
+    "deployment_strategy": "canary",
+    "deployment_strategy_config": {
+      "traffic_splits": [10, 25, 50, 100],
+      "step_interval_seconds": 300,
+      "health_check_timeout_seconds": 120,
+      "auto_promote": false,
+      "rollback_on_failure": true
+    },
+    "environment_variables": {
+      "MODEL_VERSION": "v2.0.0"
+    }
+  }
+}
+```
+
+**Configuration:**
+- `traffic_splits`: Progressive traffic percentages to canary (default: `[10, 25, 50, 100]`)
+- `step_interval_seconds`: Wait time between traffic shifts (default: `300`)
+- `health_check_timeout_seconds`: Health check timeout (default: `120`)
+- `auto_promote`: Automatically promote canary to stable (default: `false`)
+- `rollback_on_failure`: Rollback if health checks fail (default: `true`)
+
+**Manual Promotion:**
+```bash
+POST /api/v1/serve/{serve_name}/deployment/{deployment_id}/promote
+```
+
+#### Blue-Green Deployment (Zero-Downtime Cutover)
+
+Deploy a new version (green) alongside the current version (blue), then switch traffic instantly:
+
+```bash
+POST /api/v1/serve/{serve_name}/deploy
+{
+  "env": "local",
+  "artifact_version": "v2.0.0",
+  "api_serve_deployment_config": {
+    "deployment_strategy": "blue_green",
+    "deployment_strategy_config": {
+      "health_check_timeout_seconds": 120,
+      "auto_cutover": false,
+      "cleanup_after_cutover": true
+    },
+    "environment_variables": {
+      "MODEL_VERSION": "v2.0.0"
+    }
+  }
+}
+```
+
+**Configuration:**
+- `health_check_timeout_seconds`: Health check timeout (default: `120`)
+- `auto_cutover`: Automatically switch traffic after health checks pass (default: `false`)
+- `cleanup_after_cutover`: Remove blue version after cutover (default: `true`)
+
+**Manual Cutover:**
+```bash
+POST /api/v1/serve/{serve_name}/deployment/{deployment_id}/promote
+```
+
+#### Deployment Status & Rollback
+
+**Check Deployment Status:**
+```bash
+GET /api/v1/serve/{serve_name}/deployment/status?env=local
+```
+
+**Rollback Deployment:**
+```bash
+POST /api/v1/serve/{serve_name}/deployment/{deployment_id}/rollback
+```
+
+For detailed strategy selection guidance, see [.github/README.md](.github/README.md).
+
 ### Updating Infrastructure Configuration
 
 Update resource limits, replicas, or other infra settings for a deployed serve:

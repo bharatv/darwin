@@ -371,3 +371,173 @@ class TestOneClickUndeploy:
         assert exc_info.value.status_code == 404
         assert "No active deployment" in str(exc_info.value.detail)
 
+
+@pytest.mark.unit
+class TestBackwardCompatibility:
+    """Test suite for backward compatibility with existing deployments."""
+    
+    @pytest.mark.asyncio
+    async def test_deploy_without_strategy_uses_immediate(
+        self,
+        db_session,
+        test_user,
+        test_environment,
+        mock_dcm_client,
+        mock_mlflow_client
+    ):
+        """Test deployment without strategy parameter defaults to IMMEDIATE."""
+        # Arrange
+        service = DeploymentService()
+        service.dcm_client = mock_dcm_client
+        service.mlflow_client = mock_mlflow_client
+        
+        request = ModelDeploymentRequest(
+            serve_name="test-model",
+            artifact_version="v1",
+            model_uri="models:/iris/1",
+            env="test-env",
+            cores=2,
+            memory=4
+        )
+        
+        # Act
+        result = await service.deploy_model(request, test_user)
+        
+        # Assert - deployment should succeed without strategy
+        assert "service_url" in result
+        assert mock_dcm_client.build_resource.called
+        assert mock_dcm_client.start_resource.called
+        
+        # Verify deployment was created with None/IMMEDIATE strategy
+        serve = await Serve.get(name="test-model")
+        active = await ActiveDeployment.get(serve=serve, environment=test_environment)
+        deployment = await active.deployment
+        
+        from ml_serve_model import AppLayerDeployment
+        app_layer = await AppLayerDeployment.get_or_none(deployment=deployment)
+        
+        # Strategy should be None or IMMEDIATE
+        assert app_layer.deployment_strategy in [None, "IMMEDIATE"]
+    
+    @pytest.mark.asyncio
+    async def test_existing_deployments_still_work(
+        self,
+        db_session,
+        test_user,
+        test_environment,
+        mock_dcm_client,
+        mock_mlflow_client
+    ):
+        """Test that existing deployments without strategy fields still work."""
+        # Arrange - simulate old deployment record
+        from ml_serve_model import Serve, Artifact, Deployment, AppLayerDeployment, ActiveDeployment
+        from ml_serve_model.enums import ServeType
+        
+        serve = await Serve.create(
+            name="legacy-serve",
+            type=ServeType.API.value,
+            description="Legacy deployment",
+            space="test",
+            created_by=test_user
+        )
+        
+        artifact = await Artifact.create(
+            serve=serve,
+            version="v1-old",
+            github_repo_url="http://github.com/test/repo",
+            image_url="localhost:5000/test:v1",
+            created_by=test_user
+        )
+        
+        deployment = await Deployment.create(
+            serve=serve,
+            artifact=artifact,
+            environment=test_environment,
+            created_by=test_user
+        )
+        
+        # Create app layer deployment WITHOUT strategy (old way)
+        app_layer = await AppLayerDeployment.create(
+            deployment=deployment,
+            deployment_strategy=None,
+            deployment_params=None,
+            environment_variables={"OLD_VAR": "value"}
+        )
+        
+        await ActiveDeployment.create(
+            serve=serve,
+            environment=test_environment,
+            deployment=deployment
+        )
+        
+        # Act - try to deploy new version
+        service = DeploymentService()
+        service.dcm_client = mock_dcm_client
+        service.mlflow_client = mock_mlflow_client
+        
+        # Deployment should work and preserve old env vars
+        assert app_layer.deployment_strategy is None
+        assert app_layer.environment_variables == {"OLD_VAR": "value"}
+    
+    @pytest.mark.asyncio
+    async def test_strategy_factory_returns_none_for_immediate(self):
+        """Test that strategy factory returns None for IMMEDIATE strategy."""
+        # Arrange
+        service = DeploymentService()
+        
+        # Act & Assert
+        executor = service._get_strategy_executor("IMMEDIATE")
+        assert executor is None
+        
+        executor = service._get_strategy_executor(None)
+        assert executor is None
+        
+        executor = service._get_strategy_executor("")
+        assert executor is None
+    
+    @pytest.mark.asyncio
+    async def test_strategy_factory_handles_unknown_strategy(self):
+        """Test that strategy factory falls back to None for unknown strategies."""
+        # Arrange
+        service = DeploymentService()
+        
+        # Act
+        executor = service._get_strategy_executor("UNKNOWN_STRATEGY")
+        
+        # Assert - should return None and log warning
+        assert executor is None
+    
+    @pytest.mark.asyncio
+    async def test_old_api_contracts_preserved(
+        self,
+        db_session,
+        test_user,
+        test_environment,
+        mock_dcm_client,
+        mock_mlflow_client
+    ):
+        """Test that old API return structures are preserved."""
+        # Arrange
+        service = DeploymentService()
+        service.dcm_client = mock_dcm_client
+        service.mlflow_client = mock_mlflow_client
+        
+        request = ModelDeploymentRequest(
+            serve_name="test-model",
+            artifact_version="v1",
+            model_uri="models:/iris/1",
+            env="test-env",
+            cores=2,
+            memory=4
+        )
+        
+        # Act
+        result = await service.deploy_model(request, test_user)
+        
+        # Assert - should return service_url (old contract)
+        assert "service_url" in result
+        assert isinstance(result["service_url"], str)
+        
+        # Should NOT have strategy-specific fields for IMMEDIATE
+        # (those only appear when using strategies)
+

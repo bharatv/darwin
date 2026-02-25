@@ -1,7 +1,7 @@
 import os
 
 import yaml
-from typing import Optional
+from typing import Optional, Dict
 import importlib.resources as pkg_resource
 import ml_serve_core.resources as rs
 from ml_serve_core.config.configs import Config
@@ -347,4 +347,127 @@ def update_node_selector(group, node_capacity_type):
     else:
         group["nodeSelector"]["karpenter.sh/capacity-type"] = "spot"
     group['nodeSelector']['serve'] = "true"
+
+
+def generate_multi_deployment_service_name(
+    serve_name: str,
+    version_suffix: Optional[str] = None
+) -> str:
+    """
+    Generate unique service names for multi-deployment strategies.
+    
+    For deployment strategies (canary, blue-green), multiple versions
+    of the same serve need unique Kubernetes service names.
+    
+    Args:
+        serve_name: Base serve name (e.g., 'my-serve-local')
+        version_suffix: Optional version suffix (e.g., 'canary', 'green', 'v2')
+        
+    Returns:
+        Unique service name (e.g., 'my-serve-local-canary')
+        
+    Examples:
+        generate_multi_deployment_service_name('serve-local', 'canary')
+        -> 'serve-local-canary'
+        
+        generate_multi_deployment_service_name('serve-local', None)
+        -> 'serve-local'
+    """
+    if version_suffix:
+        return f"{serve_name}-{version_suffix}"
+    return serve_name
+
+
+def apply_traffic_weights_to_ingress(
+    values: dict,
+    traffic_weights: Dict[str, int],
+    namespace: str
+) -> None:
+    """
+    Apply traffic weight annotations to ingress configuration.
+    
+    Modifies the values dict in-place to add NGINX traffic splitting annotations.
+    Used by canary and blue-green deployment strategies.
+    
+    Args:
+        values: Helm values dict to modify
+        traffic_weights: Map of service names to weight percentages (must sum to 100)
+        namespace: Kubernetes namespace for services
+        
+    Example:
+        values = generate_fastapi_values(...)
+        traffic_weights = {'serve-v1': 90, 'serve-v2-canary': 10}
+        apply_traffic_weights_to_ingress(values, traffic_weights, 'serve')
+    """
+    if not traffic_weights:
+        return
+    
+    # Validate weights sum to 100
+    total_weight = sum(traffic_weights.values())
+    if total_weight != 100:
+        raise ValueError(
+            f"Traffic weights must sum to 100%, got {total_weight}%. "
+            f"Weights: {traffic_weights}"
+        )
+    
+    # Generate NGINX service-weights annotation
+    weight_entries = [
+        f"{namespace}.{service_name}: {weight}"
+        for service_name, weight in traffic_weights.items()
+    ]
+    
+    # Ensure annotations dict exists
+    if 'annotations' not in values.get('ingressInt', {}):
+        values['ingressInt']['annotations'] = {}
+    
+    # Add traffic splitting annotation
+    values['ingressInt']['annotations']['nginx.ingress.kubernetes.io/service-weights'] = \
+        ', '.join(weight_entries)
+
+
+def generate_fastapi_values_for_strategy_deployment(
+    base_values: dict,
+    version_suffix: str,
+    replica_count: Optional[int] = None
+) -> dict:
+    """
+    Generate Helm values for a strategy-specific deployment version.
+    
+    Creates a modified copy of base values with unique naming for
+    multi-version deployments (canary, blue-green).
+    
+    Args:
+        base_values: Base Helm values dict (from generate_fastapi_values)
+        version_suffix: Version identifier (e.g., 'canary', 'green', 'blue', 'stable')
+        replica_count: Optional override for replica count
+        
+    Returns:
+        Modified values dict with unique service name
+        
+    Example:
+        base = generate_fastapi_values('serve', 'local', ...)
+        canary = generate_fastapi_values_for_strategy_deployment(base, 'canary', 1)
+        # canary['name'] = 'serve-local-canary'
+        # canary['serviceName'] = 'serve-local-canary'
+    """
+    import copy
+    values = copy.deepcopy(base_values)
+    
+    # Update service name to include version suffix
+    original_name = values.get('name', 'serve')
+    versioned_name = generate_multi_deployment_service_name(original_name, version_suffix)
+    
+    values['name'] = versioned_name
+    values['serviceName'] = versioned_name
+    
+    # Override replica count if specified
+    if replica_count is not None:
+        values['replicaCount'] = replica_count
+    
+    # Add version label for tracking
+    if 'labels' not in values:
+        values['labels'] = []
+    values['labels'].append(f"version={version_suffix}")
+    
+    return values
 

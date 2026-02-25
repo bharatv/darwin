@@ -119,7 +119,7 @@ class TestArtifactDeployment:
         )
         
         deployment_config = APIServeDeploymentConfigRequest(
-            deployment_strategy="rolling",
+            deployment_strategy=None,  # Use immediate/traditional deployment
             environment_variables={
                 "MODEL_PATH": "/models/production"
             }
@@ -185,7 +185,7 @@ class TestArtifactDeployment:
         }
         
         deployment_config = APIServeDeploymentConfigRequest(
-            deployment_strategy="rolling",
+            deployment_strategy=None,  # Use immediate/traditional deployment
             environment_variables=custom_env_vars
         )
         
@@ -234,7 +234,7 @@ class TestArtifactDeployment:
         )
         
         deployment_config = APIServeDeploymentConfigRequest(
-            deployment_strategy="rolling",
+            deployment_strategy=None,  # Use immediate/traditional deployment
             environment_variables={"TEST": "value"}
         )
         
@@ -283,7 +283,7 @@ class TestArtifactDeployment:
         )
         
         deployment_config = APIServeDeploymentConfigRequest(
-            deployment_strategy="rolling"
+            deployment_strategy=None  # Use immediate/traditional deployment
         )
         
         deployment_request = DeploymentRequest(

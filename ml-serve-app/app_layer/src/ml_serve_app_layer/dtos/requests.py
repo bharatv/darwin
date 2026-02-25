@@ -208,11 +208,205 @@ class ServeConfigRequest(BaseModel):
         return self
 
 
+class RollingDeploymentConfig(BaseModel):
+    """
+    Configuration for rolling deployment strategy.
+    
+    Rolling deployments gradually replace old replicas with new ones in phases,
+    ensuring continuous availability throughout the rollout.
+    
+    Example:
+        {
+            "steps": 3,
+            "interval_seconds": 45,
+            "health_check_duration_seconds": 90
+        }
+    """
+    steps: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Number of rollout steps (1-10). Replicas will be gradually updated in this many phases."
+    )
+    interval_seconds: int = Field(
+        default=30,
+        ge=10,
+        le=600,
+        description="Wait time in seconds between rollout steps (10-600s)."
+    )
+    health_check_duration_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=300,
+        description="Duration to wait for health checks after each step (10-300s)."
+    )
+
+
+class CanaryDeploymentConfig(BaseModel):
+    """
+    Configuration for canary deployment strategy.
+    
+    Canary deployments route a small percentage of traffic to the new version first,
+    then progressively increase traffic based on health metrics and manual promotion.
+    
+    Example:
+        {
+            "traffic_splits": [10, 50, 100],
+            "promotion_criteria": "manual",
+            "rollback_on_errors": true,
+            "canary_health_check_duration_seconds": 120
+        }
+    """
+    traffic_splits: List[int] = Field(
+        default=[10, 50, 100],
+        description="Progressive traffic split percentages for canary rollout (e.g., [10, 50, 100]). "
+                    "Must be in ascending order and end with 100."
+    )
+    promotion_criteria: Optional[str] = Field(
+        default="manual",
+        description="Promotion criteria: 'manual' (default) requires explicit promotion via API, "
+                    "'auto' (future) promotes automatically if health checks pass."
+    )
+    rollback_on_errors: bool = Field(
+        default=True,
+        description="Automatically rollback if canary health checks fail."
+    )
+    canary_health_check_duration_seconds: int = Field(
+        default=120,
+        ge=30,
+        le=600,
+        description="Duration to monitor canary health before allowing promotion (30-600s)."
+    )
+
+    @field_validator("traffic_splits")
+    def validate_traffic_splits(cls, value):
+        if not value:
+            raise ValueError("traffic_splits must contain at least one value")
+        if not all(0 < split <= 100 for split in value):
+            raise ValueError("All traffic split values must be between 1 and 100")
+        if value[-1] != 100:
+            raise ValueError("Final traffic split must be 100%")
+        if sorted(value) != value:
+            raise ValueError("traffic_splits must be in ascending order")
+        return value
+
+
+class BlueGreenDeploymentConfig(BaseModel):
+    """
+    Configuration for blue-green deployment strategy.
+    
+    Blue-green deployments run the new version (green) alongside the current version (blue),
+    then perform an instant traffic cutover once green is validated as healthy.
+    
+    Example:
+        {
+            "switch_mode": "manual",
+            "cutover_delay_seconds": 60,
+            "green_health_check_duration_seconds": 120
+        }
+    """
+    switch_mode: Literal["manual", "auto"] = Field(
+        default="manual",
+        description="Cutover mode: 'manual' requires explicit promotion via API, "
+                    "'auto' switches automatically after green health checks pass."
+    )
+    cutover_delay_seconds: int = Field(
+        default=60,
+        ge=0,
+        le=600,
+        description="Delay in seconds before automatic cutover in 'auto' mode (0-600s). "
+                    "Ignored in 'manual' mode."
+    )
+    green_health_check_duration_seconds: int = Field(
+        default=120,
+        ge=30,
+        le=600,
+        description="Duration to monitor green deployment health before allowing cutover (30-600s)."
+    )
+
+
 class APIServeDeploymentConfigRequest(BaseModel):
-    deployment_strategy: Optional[str] = Field(None, description="Deployment strategy for the API serve.")
-    deployment_strategy_config: Optional[dict] = Field(None,
-                                                       description="Deployment strategy configuration for the API serve.")
-    environment_variables: Optional[dict] = Field(None, description="Environment variables for the API serve.")
+    """
+    Deployment configuration for API serves.
+    
+    Supports multiple deployment strategies for safe rollouts:
+    - IMMEDIATE: Standard immediate deployment (default, backward compatible)
+    - ROLLING: Gradual replica replacement in phases
+    - CANARY: Progressive traffic shifting with manual/auto promotion
+    - BLUE_GREEN: Instant cutover between blue and green versions
+    
+    Examples:
+        # Immediate deployment (default)
+        {
+            "deployment_strategy": "IMMEDIATE",
+            "environment_variables": {"LOG_LEVEL": "INFO"}
+        }
+        
+        # Canary deployment
+        {
+            "deployment_strategy": "CANARY",
+            "deployment_strategy_config": {
+                "traffic_splits": [10, 50, 100],
+                "rollback_on_errors": true
+            }
+        }
+        
+        # Rolling deployment
+        {
+            "deployment_strategy": "ROLLING",
+            "deployment_strategy_config": {
+                "steps": 5,
+                "interval_seconds": 45
+            }
+        }
+    """
+    deployment_strategy: Optional[str] = Field(
+        None, 
+        description="Deployment strategy: 'IMMEDIATE' (default), 'ROLLING', 'CANARY', or 'BLUE_GREEN'."
+    )
+    deployment_strategy_config: Optional[dict] = Field(
+        None,
+        description="Strategy-specific configuration. Required when deployment_strategy is ROLLING, CANARY, or BLUE_GREEN. "
+                    "See RollingDeploymentConfig, CanaryDeploymentConfig, or BlueGreenDeploymentConfig for schema."
+    )
+    environment_variables: Optional[dict] = Field(
+        None, 
+        description="Environment variables for the API serve (key-value pairs)."
+    )
+
+    @field_validator("deployment_strategy")
+    def validate_deployment_strategy(cls, value):
+        """Validate deployment strategy is a known value."""
+        if value is not None:
+            allowed_strategies = ["IMMEDIATE", "ROLLING", "CANARY", "BLUE_GREEN"]
+            value_upper = value.upper()
+            if value_upper not in allowed_strategies:
+                raise ValueError(
+                    f"Invalid deployment_strategy '{value}'. Must be one of: {', '.join(allowed_strategies)}"
+                )
+            return value_upper
+        return value
+
+    @model_validator(mode="after")
+    def validate_strategy_config(self):
+        """Validate strategy config matches the selected strategy."""
+        if self.deployment_strategy and self.deployment_strategy_config:
+            strategy = self.deployment_strategy.upper()
+            config = self.deployment_strategy_config
+
+            try:
+                if strategy == "ROLLING":
+                    RollingDeploymentConfig(**config)
+                elif strategy == "CANARY":
+                    CanaryDeploymentConfig(**config)
+                elif strategy == "BLUE_GREEN":
+                    BlueGreenDeploymentConfig(**config)
+            except Exception as e:
+                raise ValueError(
+                    f"Invalid deployment_strategy_config for strategy '{strategy}': {str(e)}"
+                )
+        
+        return self
 
 
 class WorkflowServeDeploymentConfigRequest(BaseModel):

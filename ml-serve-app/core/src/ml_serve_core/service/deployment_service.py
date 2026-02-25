@@ -24,14 +24,24 @@ from ml_serve_core.utils.yaml_utils import generate_fastapi_values, generate_fas
     generate_fastapi_values_for_one_click_model_deployment
 from ml_serve_core.utils.storage_strategy import determine_storage_strategy
 from ml_serve_model import Serve, Artifact, Environment, APIServeInfraConfig, User, ScheduledWorkflowDeployment, \
-    Deployment
+    Deployment, DeploymentTransition
 from ml_serve_model.active_deployment import ActiveDeployment
 from ml_serve_model.app_layer_deployments import AppLayerDeployment
 from ml_serve_model.deployment import Deployment
 from loguru import logger
 from ml_serve_model.serve_configs import ServeConfig, WorkflowServeInfraConfig
-from ml_serve_model.enums import BackendType, ServeType, DeploymentStatus
+from ml_serve_model.enums import BackendType, ServeType, DeploymentStatus, DeploymentStrategy
 from datetime import datetime, timezone
+
+# Import deployment strategies
+from ml_serve_core.strategies import (
+    BaseDeploymentStrategy,
+    DeploymentContext,
+    DeploymentResult,
+    RollingDeploymentExecutor,
+    CanaryDeploymentExecutor,
+    BlueGreenDeploymentExecutor
+)
 
 
 class DeploymentService:
@@ -42,6 +52,156 @@ class DeploymentService:
         self.config = Config()  # Centralized configuration
         self.workflow_client = DarwinWorkflowClient()
         self.mlflow_client = MLflowClient()
+        
+        # Strategy executors (lazy initialization)
+        self._rolling_executor = None
+        self._canary_executor = None
+        self._blue_green_executor = None
+    
+    def _get_strategy_executor(self, strategy_name: str) -> Optional[BaseDeploymentStrategy]:
+        """
+        Factory method to get deployment strategy executor.
+        
+        Args:
+            strategy_name: Strategy name (IMMEDIATE, ROLLING, CANARY, BLUE_GREEN)
+            
+        Returns:
+            Strategy executor instance or None for IMMEDIATE
+        """
+        if not strategy_name or strategy_name == "IMMEDIATE":
+            return None  # IMMEDIATE uses legacy deployment flow
+        
+        strategy_upper = strategy_name.upper()
+        
+        if strategy_upper == "ROLLING":
+            if not self._rolling_executor:
+                self._rolling_executor = RollingDeploymentExecutor()
+            return self._rolling_executor
+        
+        elif strategy_upper == "CANARY":
+            if not self._canary_executor:
+                self._canary_executor = CanaryDeploymentExecutor()
+            return self._canary_executor
+        
+        elif strategy_upper == "BLUE_GREEN":
+            if not self._blue_green_executor:
+                self._blue_green_executor = BlueGreenDeploymentExecutor()
+            return self._blue_green_executor
+        
+        else:
+            logger.warning(f"Unknown deployment strategy: {strategy_name}, falling back to IMMEDIATE")
+            return None
+    
+    async def _record_deployment_transition(
+        self,
+        deployment: Deployment,
+        from_status: Optional[str],
+        to_status: str,
+        transition_type: str,
+        triggered_by: str,
+        reason: Optional[str] = None,
+        metadata: Optional[dict] = None
+    ) -> DeploymentTransition:
+        """
+        Record a deployment state transition for audit and tracking.
+        
+        Args:
+            deployment: Deployment model instance
+            from_status: Previous status (None for initial deployment)
+            to_status: New status
+            transition_type: Type of transition (DEPLOY, PROMOTE, ROLLBACK, etc.)
+            triggered_by: User or system identifier
+            reason: Optional reason for transition
+            metadata: Optional additional metadata
+            
+        Returns:
+            Created DeploymentTransition instance
+        """
+        transition = await DeploymentTransition.create(
+            deployment=deployment,
+            from_status=from_status,
+            to_status=to_status,
+            transition_type=transition_type,
+            triggered_by=triggered_by,
+            reason=reason,
+            metadata=metadata or {}
+        )
+        
+        logger.info(
+            f"Recorded transition for deployment {deployment.id}: "
+            f"{from_status} -> {to_status} ({transition_type})"
+        )
+        
+        return transition
+    
+    async def get_deployment_transitions(
+        self,
+        deployment_id: int
+    ) -> List[DeploymentTransition]:
+        """
+        Get all transitions for a deployment.
+        
+        Args:
+            deployment_id: Deployment ID
+            
+        Returns:
+            List of DeploymentTransition instances, newest first
+        """
+        transitions = await DeploymentTransition.filter(
+            deployment_id=deployment_id
+        ).order_by("-triggered_at")
+        
+        return transitions
+    
+    async def poll_deployment_status(
+        self,
+        resource_id: str,
+        kube_cluster: str,
+        namespace: str,
+        timeout_seconds: int = 300
+    ) -> str:
+        """
+        Poll DCM for deployment status until stable or timeout.
+        
+        Args:
+            resource_id: DCM resource ID
+            kube_cluster: Kubernetes cluster
+            namespace: Kubernetes namespace
+            timeout_seconds: Maximum time to poll
+            
+        Returns:
+            Final status string
+        """
+        import asyncio
+        
+        elapsed = 0
+        check_interval = 10
+        
+        logger.info(f"Polling status for resource {resource_id} (timeout: {timeout_seconds}s)")
+        
+        while elapsed < timeout_seconds:
+            try:
+                status = await self.dcm_client.get_status(
+                    resource_id=resource_id,
+                    kube_cluster=kube_cluster,
+                    kube_namespace=namespace
+                )
+                
+                # Consider these as stable states
+                if status in ['RUNNING', 'STOPPED', 'FAILED']:
+                    logger.info(f"Resource {resource_id} reached stable status: {status}")
+                    return status
+                
+                logger.debug(f"Resource {resource_id} status: {status}, continuing to poll...")
+                
+            except Exception as e:
+                logger.warning(f"Status check error for {resource_id}: {e}")
+            
+            await asyncio.sleep(check_interval)
+            elapsed += check_interval
+        
+        logger.warning(f"Status polling timed out after {timeout_seconds}s for {resource_id}")
+        return "UNKNOWN"
 
     @staticmethod
     def _sanitize_identifier(value: str) -> str:
@@ -221,6 +381,21 @@ class DeploymentService:
                 deployment_params=deployment_params,
                 environment_variables=environment_variables
             )
+            
+            # Record initial deployment transition
+            await self._record_deployment_transition(
+                deployment=deployment,
+                from_status=None,
+                to_status=DeploymentStatus.ACTIVE.value if not deployment_strategy else "CANARY",
+                transition_type="DEPLOY",
+                triggered_by=user.username,
+                reason=f"Initial deployment with strategy: {deployment_strategy or 'IMMEDIATE'}",
+                metadata={
+                    'strategy': deployment_strategy,
+                    'artifact_version': artifact.version,
+                    'environment': env.name
+                }
+            )
 
         return deployment, resp
 
@@ -233,10 +408,59 @@ class DeploymentService:
             infra_config: APIServeInfraConfig,
             user: User
     ):
-        if api_deployment_config is None:
-            environment_variables = None
-        else:
+        # Extract deployment strategy configuration
+        strategy_name = None
+        strategy_config = {}
+        
+        if api_deployment_config:
+            strategy_name = api_deployment_config.deployment_strategy
+            strategy_config = api_deployment_config.deployment_strategy_config or {}
             environment_variables = api_deployment_config.environment_variables
+        else:
+            environment_variables = None
+        
+        # Get strategy executor
+        strategy_executor = self._get_strategy_executor(strategy_name)
+        
+        # Use strategy if configured, otherwise fall back to IMMEDIATE (legacy) deployment
+        if strategy_executor:
+            logger.info(f"Using {strategy_name} deployment strategy for {serve.name}")
+            return await self._deploy_with_strategy(
+                strategy_executor=strategy_executor,
+                strategy_config=strategy_config,
+                serve=serve,
+                artifact=artifact,
+                env=env,
+                infra_config=infra_config,
+                environment_variables=environment_variables,
+                user=user
+            )
+        else:
+            # IMMEDIATE strategy (backward compatible)
+            logger.info(f"Using IMMEDIATE deployment strategy for {serve.name}")
+            return await self._deploy_immediate(
+                serve=serve,
+                artifact=artifact,
+                env=env,
+                infra_config=infra_config,
+                environment_variables=environment_variables,
+                user=user
+            )
+    
+    async def _deploy_immediate(
+            self,
+            serve: Serve,
+            artifact: Artifact,
+            env: Environment,
+            infra_config: APIServeInfraConfig,
+            environment_variables: Optional[dict],
+            user: User
+    ):
+        """
+        Legacy IMMEDIATE deployment (backward compatible).
+        
+        This is the original deployment flow for non-strategy deployments.
+        """
         values_json = generate_fastapi_values(
             name=serve.name,
             env=env.name,
@@ -265,6 +489,80 @@ class DeploymentService:
 
         return {
             "service_url": get_service_url(serve.name, env.name, EnvConfig(**env.env_configs), env.is_protected)
+        }
+    
+    async def _deploy_with_strategy(
+            self,
+            strategy_executor: BaseDeploymentStrategy,
+            strategy_config: dict,
+            serve: Serve,
+            artifact: Artifact,
+            env: Environment,
+            infra_config: APIServeInfraConfig,
+            environment_variables: Optional[dict],
+            user: User
+    ):
+        """
+        Deploy using a deployment strategy executor.
+        
+        Args:
+            strategy_executor: Strategy executor instance
+            strategy_config: Strategy-specific configuration
+            serve: Serve model
+            artifact: Artifact model
+            env: Environment model
+            infra_config: Infrastructure configuration
+            environment_variables: Environment variables
+            user: User model
+            
+        Returns:
+            Dict with service_url and deployment metadata
+        """
+        # Generate base Helm values
+        base_values = generate_fastapi_values(
+            name=serve.name,
+            env=env.name,
+            runtime=artifact.image_url,
+            env_config=EnvConfig(**env.env_configs),
+            user_email=user.username,
+            serve_infra_config=infra_config,
+            environment_variables=environment_variables,
+            is_environment_protected=env.is_protected,
+        )
+        
+        # Create deployment context
+        context = DeploymentContext(
+            serve_name=serve.name,
+            environment=env.name,
+            namespace=env.namespace,
+            kube_cluster=env.cluster_name,
+            artifact_id=f"{env.name}-{serve.name}-{artifact.version}",
+            runtime_image=artifact.image_url,
+            version=artifact.version,
+            base_values=base_values,
+            strategy_config=strategy_config,
+            environment_variables=environment_variables,
+            darwin_resource=FASTAPI_SERVE_RESOURCE_NAME
+        )
+        
+        # Execute strategy
+        result: DeploymentResult = await strategy_executor.execute(context)
+        
+        if not result.success:
+            raise Exception(f"Strategy deployment failed: {result.message}")
+        
+        logger.info(
+            f"Strategy deployment succeeded: primary={result.primary_resource_id}, "
+            f"secondary={result.secondary_resource_id}, status={result.status}"
+        )
+        
+        # Return service URL and metadata
+        return {
+            "service_url": get_service_url(serve.name, env.name, EnvConfig(**env.env_configs), env.is_protected),
+            "deployment_status": result.status,
+            "primary_resource_id": result.primary_resource_id,
+            "secondary_resource_id": result.secondary_resource_id,
+            "metadata": result.metadata
         }
 
     async def deploy_workflow_serve(

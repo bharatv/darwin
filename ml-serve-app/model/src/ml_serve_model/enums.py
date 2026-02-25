@@ -29,3 +29,14 @@ class JobStatus(Enum):
 class DeploymentStatus(Enum):
     ACTIVE = "ACTIVE"
     ENDED = "ENDED"
+    CANARY = "CANARY"
+    STABLE = "STABLE"
+    SUPERSEDED = "SUPERSEDED"
+    ROLLING_OUT = "ROLLING_OUT"
+
+
+class DeploymentStrategy(Enum):
+    IMMEDIATE = "IMMEDIATE"
+    ROLLING = "ROLLING"
+    CANARY = "CANARY"
+    BLUE_GREEN = "BLUE_GREEN"

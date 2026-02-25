@@ -1,4 +1,5 @@
 from tortoise import models, fields
+from .enums import DeploymentStrategy
 
 
 class AppLayerDeployment(models.Model):
@@ -11,7 +12,9 @@ class AppLayerDeployment(models.Model):
         on_delete=fields.CASCADE
     )
 
-    deployment_strategy = fields.CharField(max_length=50, null=True)  # e.g., "ROLLING", "CANARY"
+    # Strategy field now references DeploymentStrategy enum values
+    # Defaults to IMMEDIATE for backward compatibility
+    deployment_strategy = fields.CharField(max_length=50, null=True, default="IMMEDIATE")
     deployment_params = fields.JSONField(null=True)  # Flexible for any strategy-specific params
     environment_variables = fields.JSONField(null=True)  # Environment variables
 
