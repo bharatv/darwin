@@ -344,6 +344,10 @@ class TestArtifactDeploymentFlow:
                 "artifact_version": artifact_version,
                 "api_serve_deployment_config": {
                     "deployment_strategy": "rolling",
+                    "deployment_strategy_config": {
+                        "maxSurge": "25%",
+                        "maxUnavailable": 0,
+                    },
                     "environment_variables": {
                         "TEST_VAR": "test_value"
                     }
@@ -365,6 +369,112 @@ class TestArtifactDeploymentFlow:
             pytest.skip("Artifact not yet built - this is expected for slow builds")
         else:
             assert deploy_response.status_code in [200, 201]
+            data = deploy_response.json()
+            if "data" in data and "deployment_id" in data.get("data", {}):
+                assert data["data"]["deployment_id"] is not None
+
+
+@pytest.mark.integration
+class TestArtifactDeploymentWithStrategies:
+    """Integration tests for deploy with deployment strategies."""
+
+    @pytest.mark.asyncio
+    async def test_deploy_artifact_with_rolling_config(
+        self,
+        ml_serve_base_url: str,
+        http_client: httpx.AsyncClient,
+        cleanup_test_resources,
+        integration_test_env: str,
+    ):
+        """Test artifact deploy with rolling strategy config."""
+        serve_name = "strategy-rolling-test"
+        cleanup_test_resources(serve_name, integration_test_env)
+
+        await http_client.post(
+            f"{ml_serve_base_url}/api/v1/serve",
+            json={
+                "name": serve_name,
+                "type": "api",
+                "description": "Strategy test",
+                "space": "test-space",
+            },
+        )
+
+        await http_client.post(
+            f"{ml_serve_base_url}/api/v1/serve/{serve_name}/infra-config/{integration_test_env}",
+            json={
+                "api_serve_config": {
+                    "backend_type": "fastapi",
+                    "fast_api_config": {
+                        "cores": 2,
+                        "memory": 4,
+                        "min_replicas": 1,
+                        "max_replicas": 3,
+                        "node_capacity_type": "spot",
+                    }
+                }
+            },
+        )
+
+        deploy_response = await http_client.post(
+            f"{ml_serve_base_url}/api/v1/serve/{serve_name}/deploy",
+            json={
+                "env": integration_test_env,
+                "artifact_version": "v1.0.0",
+                "api_serve_deployment_config": {
+                    "deployment_strategy": "rolling",
+                    "deployment_strategy_config": {
+                        "maxSurge": "50%",
+                        "maxUnavailable": 1,
+                    },
+                },
+            },
+        )
+
+        if deploy_response.status_code in [400, 404]:
+            error_msg = deploy_response.json().get("detail", deploy_response.json())
+            if "not found" in str(error_msg).lower() or "not yet built" in str(error_msg).lower():
+                pytest.skip("Artifact not ready for deploy")
+        assert deploy_response.status_code in [200, 201]
+
+    @pytest.mark.asyncio
+    async def test_one_click_deploy_model_with_strategies(
+        self,
+        ml_serve_base_url: str,
+        http_client: httpx.AsyncClient,
+        cleanup_test_resources,
+        integration_test_env: str,
+        test_model_uri: str,
+    ):
+        """Test one-click deploy-model with deployment_strategy parameter."""
+        serve_name = "one-click-strategy-test"
+        cleanup_test_resources(serve_name, integration_test_env)
+
+        response = await http_client.post(
+            f"{ml_serve_base_url}/api/v1/serve/deploy-model",
+            json={
+                "serve_name": serve_name,
+                "artifact_version": "v1.0.0",
+                "model_uri": test_model_uri,
+                "env": integration_test_env,
+                "deployment_strategy": "rolling",
+                "deployment_strategy_config": {
+                    "maxSurge": "25%",
+                    "maxUnavailable": 0,
+                },
+                "cores": 2,
+                "memory": 4,
+                "min_replicas": 1,
+                "max_replicas": 2,
+            },
+        )
+
+        if response.status_code in [400, 404]:
+            data = response.json()
+            error_msg = str(data.get("detail", data))
+            if "model" in error_msg.lower() or "not found" in error_msg.lower():
+                pytest.skip(f"Model deploy failed: {error_msg}")
+        assert response.status_code in [200, 201]
 
 
 @pytest.mark.integration

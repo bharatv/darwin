@@ -30,4 +30,7 @@ spec:
     {{- end }}
   selector:
     {{- include "service-deployment.selectorLabels" . | nindent 4 }}
+    {{- if .Values.versionLabel }}
+    version: {{ .Values.versionLabel | quote }}
+    {{- end }}
 {{- end }}

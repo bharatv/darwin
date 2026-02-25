@@ -213,7 +213,8 @@ def generate_fastapi_values(
         user_email: str,
         serve_infra_config: APIServeInfraConfig,
         environment_variables: Optional[dict[str, str]],
-        is_environment_protected: bool
+        is_environment_protected: bool,
+        deployment_strategy_config: Optional[dict] = None,
 ) -> dict:
     with pkg_resource.open_text(rs, FASTAPI_VALUES_TEMPLATE_NAME) as stream:
         stream_content = stream.read()
@@ -273,6 +274,17 @@ def generate_fastapi_values(
         serve_infra_config.fast_api_config_object.memory
     )
     update_node_selector(values, serve_infra_config.fast_api_config_object.node_capacity_type)
+
+    if deployment_strategy_config:
+        values['deploymentStrategyConfig'] = {
+            'maxSurge': deployment_strategy_config.get('maxSurge', '25%'),
+            'maxUnavailable': deployment_strategy_config.get('maxUnavailable', 0),
+        }
+    else:
+        values['deploymentStrategyConfig'] = {
+            'maxSurge': '25%',
+            'maxUnavailable': 0,
+        }
     return values
 
 

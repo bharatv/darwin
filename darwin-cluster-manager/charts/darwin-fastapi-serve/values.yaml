@@ -156,6 +156,10 @@ configServer:
   vaultToken: null
 labels: []
 org: dream11
+deploymentStrategyConfig:
+  maxSurge: "25%"
+  maxUnavailable: 0
+
 flagger:
   metrics:
   - name: sidecar-error-rate-measure

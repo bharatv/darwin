@@ -124,6 +124,11 @@ configServer:
 labels: []
 org: ORGANIZATION_NAME
 
+# Deployment strategy config (rolling: maxSurge, maxUnavailable)
+deploymentStrategyConfig:
+  maxSurge: "25%"
+  maxUnavailable: 0
+
 # Slack notifications flagger
 flagger:
   enabled: false

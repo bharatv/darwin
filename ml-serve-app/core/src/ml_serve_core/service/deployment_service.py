@@ -19,6 +19,10 @@ from ml_serve_core.constants.constants import (
 from ml_serve_core.config.configs import Config
 from ml_serve_core.dtos.dtos import EnvConfig
 from ml_serve_core.service.serve_config_service import ServeConfigService
+from ml_serve_core.service.deployment_strategy_service import DeploymentStrategyService
+from ml_serve_core.service.deployment_lock_service import DeploymentLockService
+from ml_serve_core.service.traffic_management_service import TrafficManagementService
+from ml_serve_core.service.resource_validation_service import ResourceValidationService
 from ml_serve_core.utils.utils import get_host_name, get_service_url, get_service_url_for_one_click
 from ml_serve_core.utils.yaml_utils import generate_fastapi_values, generate_fastapi_infra_values, \
     generate_fastapi_values_for_one_click_model_deployment
@@ -39,6 +43,10 @@ class DeploymentService:
     def __init__(self):
         self.dcm_client = DCMClient()
         self.serve_config_service = ServeConfigService()
+        self.deployment_strategy_service = DeploymentStrategyService()
+        self.deployment_lock_service = DeploymentLockService()
+        self.traffic_management_service = TrafficManagementService()
+        self.resource_validation_service = ResourceValidationService()
         self.config = Config()  # Centralized configuration
         self.workflow_client = DarwinWorkflowClient()
         self.mlflow_client = MLflowClient()
@@ -119,6 +127,162 @@ class DeploymentService:
 
         return deployment
 
+    async def get_deployment_by_id(self, deployment_id: int) -> Optional[Deployment]:
+        """Get deployment by ID."""
+        return await Deployment.get_or_none(id=deployment_id)
+
+    async def promote_deployment(self, deployment_id: int, user: User) -> dict:
+        """Promote canary or blue-green deployment to 100% traffic."""
+        deployment = await self.get_deployment_by_id(deployment_id)
+        if not deployment:
+            raise HTTPException(status_code=404, detail="Deployment not found")
+        app_deployment = await self.get_app_layer_deployment_by_id(deployment_id)
+        if not app_deployment:
+            raise HTTPException(
+                status_code=400,
+                detail="Promote only supported for API deployments",
+            )
+        strategy = app_deployment.deployment_strategy or ""
+        if strategy not in ("canary", "blue_green"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Promote not supported for strategy '{strategy}'",
+            )
+        serve = await deployment.serve
+        env = await deployment.environment
+        await self.deployment_strategy_service.promote_deployment(
+            serve=serve,
+            env=env,
+            deployment=deployment,
+            app_deployment=app_deployment,
+        )
+        await self._update_active_deployment(serve, env, deployment)
+        logger.info(f"Promoted deployment {deployment_id} for {serve.name}")
+        return {"message": "Deployment promoted successfully", "data": {"deployment_id": deployment_id}}
+
+    async def abort_canary(self, deployment_id: int, user: User) -> dict:
+        """Abort canary deployment; traffic stays on stable."""
+        deployment = await self.get_deployment_by_id(deployment_id)
+        if not deployment:
+            raise HTTPException(status_code=404, detail="Deployment not found")
+        app_deployment = await self.get_app_layer_deployment_by_id(deployment_id)
+        if not app_deployment or app_deployment.deployment_strategy != "canary":
+            raise HTTPException(
+                status_code=400,
+                detail="Abort only supported for canary deployments",
+            )
+        serve = await deployment.serve
+        env = await deployment.environment
+        await self.deployment_strategy_service.abort_canary(serve=serve, env=env)
+        logger.info(f"Aborted canary deployment {deployment_id} for {serve.name}")
+        return {"message": "Canary aborted successfully", "data": {"deployment_id": deployment_id}}
+
+    async def step_canary_traffic(
+        self, deployment_id: int, traffic_percent: int, user: User
+    ) -> dict:
+        """Advance canary traffic to specified percentage."""
+        deployment = await self.get_deployment_by_id(deployment_id)
+        if not deployment:
+            raise HTTPException(status_code=404, detail="Deployment not found")
+        app_deployment = await self.get_app_layer_deployment_by_id(deployment_id)
+        if not app_deployment or app_deployment.deployment_strategy != "canary":
+            raise HTTPException(
+                status_code=400,
+                detail="Step only supported for canary deployments",
+            )
+        serve = await deployment.serve
+        env = await deployment.environment
+        await self.deployment_strategy_service.step_canary_traffic(
+            serve=serve, env=env, traffic_percent=traffic_percent
+        )
+        logger.info(
+            f"Canary traffic stepped to {traffic_percent}% for deployment {deployment_id}"
+        )
+        return {
+            "message": f"Canary traffic set to {traffic_percent}%",
+            "data": {"deployment_id": deployment_id, "traffic_percent": traffic_percent},
+        }
+
+    async def rollback_deployment(
+        self, serve_name: str, env_name: str, user: User
+    ) -> dict:
+        """Rollback to previous deployment version."""
+        serve = await Serve.get_or_none(name=serve_name)
+        if not serve:
+            raise HTTPException(status_code=404, detail=f"Serve '{serve_name}' not found")
+        env = await Environment.get_or_none(name=env_name)
+        if not env:
+            raise HTTPException(status_code=404, detail=f"Environment '{env_name}' not found")
+        active = await ActiveDeployment.get_or_none(serve=serve, environment=env)
+        if not active:
+            raise HTTPException(
+                status_code=404,
+                detail="No active deployment to rollback from",
+            )
+        previous = await active.previous_deployment
+        if not previous:
+            raise HTTPException(
+                status_code=400,
+                detail="No previous deployment to rollback to",
+            )
+        prev_artifact = await previous.artifact
+        current = await active.deployment
+        current_artifact = await current.artifact
+        app_deployment = await self.get_app_layer_deployment_by_id(current.id)
+        strategy = app_deployment.deployment_strategy if app_deployment else None
+        if strategy == "canary":
+            await self.deployment_strategy_service.abort_canary(serve=serve, env=env)
+        elif strategy == "blue_green":
+            await self.deployment_strategy_service.rollback_blue_green(
+                serve=serve, env=env
+            )
+        else:
+            resource_id = f"{env.name}-{serve.name}"
+            await self.dcm_client.start_resource(
+                resource_id=resource_id,
+                artifact_id=f"{env.name}-{serve.name}-{prev_artifact.version}",
+                kube_cluster=env.cluster_name,
+                namespace=env.namespace,
+                darwin_resource=FASTAPI_SERVE_RESOURCE_NAME,
+            )
+        await self._update_active_deployment(serve, env, previous)
+        logger.info(
+            f"Rolled back {serve.name} in {env.name} from {current_artifact.version} "
+            f"to {prev_artifact.version}"
+        )
+        return {
+            "message": "Rollback successful",
+            "data": {
+                "serve_name": serve_name,
+                "env": env_name,
+                "artifact_version": prev_artifact.version,
+            },
+        }
+
+    async def get_deployment_status(self, deployment_id: int) -> dict:
+        """Get deployment status (strategy, traffic split, versions)."""
+        deployment = await self.get_deployment_by_id(deployment_id)
+        if not deployment:
+            raise HTTPException(status_code=404, detail="Deployment not found")
+        serve = await deployment.serve
+        env = await deployment.environment
+        artifact = await deployment.artifact
+        app_deployment = await self.get_app_layer_deployment_by_id(deployment_id)
+        strategy = (app_deployment.deployment_strategy if app_deployment else None) or "rolling"
+        is_locked = await self.deployment_lock_service.is_locked(
+            serve_id=serve.id, environment_id=env.id
+        )
+        return {
+            "deployment_id": deployment_id,
+            "serve_name": serve.name,
+            "env": env.name,
+            "artifact_version": artifact.version,
+            "strategy": strategy,
+            "status": getattr(deployment, "status", DeploymentStatus.ACTIVE.value),
+            "locked": is_locked,
+            "created_at": deployment.created_at.isoformat() if deployment.created_at else None,
+        }
+
     async def deploy_artifact(
             self,
             serve: Serve,
@@ -128,6 +292,15 @@ class DeploymentService:
             deployment_request: DeploymentRequest,
             user: User
     ):
+        if serve.type == ServeType.API.value and hasattr(serve_config, "fast_api_config_object"):
+            fc = serve_config.fast_api_config_object
+            if fc:
+                required_cpu = float(fc.cores or 1) * (fc.min_replicas or 1)
+                required_memory = float(fc.memory or 1) * (fc.min_replicas or 1)
+                await self.resource_validation_service.check_resources(
+                    env=env, required_cpu=required_cpu, required_memory=required_memory
+                )
+
         previous_active_deployment = await ActiveDeployment.get_or_none(serve=serve, environment=env)
         api_deployment_resp = None
 
@@ -138,20 +311,27 @@ class DeploymentService:
             previous_artifact_version = previous_artifact.version
 
         deployment = None
+        api_deployment_config = deployment_request.api_serve_deployment_config
         if serve.type == ServeType.API.value:
             if previous_deployment_obj:
                 api_deployment_obj = await self.get_app_layer_deployment_by_id(previous_deployment_obj.id)
-                if deployment_request.api_serve_deployment_config is None:
+                if api_deployment_config is None:
                     deployment_request.api_serve_deployment_config = APIServeDeploymentConfigRequest(
                         environment_variables=api_deployment_obj.environment_variables,
                         deployment_strategy=api_deployment_obj.deployment_strategy,
                         deployment_strategy_config=api_deployment_obj.deployment_params
                     )
+                    api_deployment_config = deployment_request.api_serve_deployment_config
                 elif (
-                        deployment_request.api_serve_deployment_config.environment_variables is None
-                        or deployment_request.api_serve_deployment_config.environment_variables == {}
-                ):
-                    deployment_request.api_serve_deployment_config.environment_variables = api_deployment_obj.environment_variables
+                        api_deployment_config.environment_variables is None
+                        or api_deployment_config.environment_variables == {}
+                ) and api_deployment_obj:
+                    deployment_request.api_serve_deployment_config = APIServeDeploymentConfigRequest(
+                        deployment_strategy=api_deployment_config.deployment_strategy,
+                        deployment_strategy_config=api_deployment_config.deployment_strategy_config,
+                        environment_variables=api_deployment_obj.environment_variables,
+                    )
+                    api_deployment_config = deployment_request.api_serve_deployment_config
 
             deployment, api_deployment_resp = await self.deploy_api_serve(
                 serve,
@@ -175,12 +355,21 @@ class DeploymentService:
                 user
             )
 
-        if not previous_active_deployment:
+        strategy = api_deployment_config.deployment_strategy if api_deployment_config else None
+        if strategy in (None, "rolling"):
+            if not previous_active_deployment:
+                await ActiveDeployment.create(serve=serve, environment=env, deployment=deployment)
+            else:
+                previous_active_deployment.previous_deployment = await previous_active_deployment.deployment
+                previous_active_deployment.deployment = deployment
+                await previous_active_deployment.save()
+        elif strategy == "blue_green" and not previous_active_deployment:
             await ActiveDeployment.create(serve=serve, environment=env, deployment=deployment)
-        else:
-            previous_active_deployment.previous_deployment = await previous_active_deployment.deployment
-            previous_active_deployment.deployment = deployment
-            await previous_active_deployment.save()
+
+        if api_deployment_resp and deployment:
+            api_deployment_resp["deployment_id"] = deployment.id
+            api_deployment_resp["strategy"] = strategy or "rolling"
+            api_deployment_resp["status"] = "deploying"
 
         return api_deployment_resp
 
@@ -194,10 +383,32 @@ class DeploymentService:
             user: User
     ):
         resp = None
+        strategy = api_deployment_config.deployment_strategy if api_deployment_config else None
+
         if api_serve_config.backend_type == BackendType.FastAPI.value:
-            resp = await self.deploy_fastapi_serve(
-                serve, artifact, env, api_deployment_config, api_serve_config, user
-            )
+            if strategy == "canary":
+                await self.deployment_strategy_service.deploy_canary(
+                    serve=serve,
+                    artifact=artifact,
+                    env=env,
+                    deployment_params=api_deployment_config.deployment_strategy_config if api_deployment_config else None,
+                    user=user,
+                    api_serve_config=api_serve_config,
+                )
+                resp = {"service_url": get_service_url(serve.name, env.name, EnvConfig(**env.env_configs), env.is_protected)}
+            elif strategy == "blue_green":
+                await self.deployment_strategy_service.deploy_blue_green(
+                    serve=serve,
+                    artifact=artifact,
+                    env=env,
+                    user=user,
+                    api_serve_config=api_serve_config,
+                )
+                resp = {"service_url": get_service_url(serve.name, env.name, EnvConfig(**env.env_configs), env.is_protected)}
+            else:
+                resp = await self.deploy_fastapi_serve(
+                    serve, artifact, env, api_deployment_config, api_serve_config, user
+                )
 
         async with in_transaction():
             deployment = await Deployment.create(
@@ -222,6 +433,11 @@ class DeploymentService:
                 environment_variables=environment_variables
             )
 
+            if strategy == "canary":
+                await self.deployment_lock_service.update_lock_deployment_id(
+                    serve_id=serve.id, environment_id=env.id, deployment_id=deployment.id
+                )
+
         return deployment, resp
 
     async def deploy_fastapi_serve(
@@ -235,8 +451,10 @@ class DeploymentService:
     ):
         if api_deployment_config is None:
             environment_variables = None
+            deployment_strategy_config = None
         else:
             environment_variables = api_deployment_config.environment_variables
+            deployment_strategy_config = api_deployment_config.deployment_strategy_config
         values_json = generate_fastapi_values(
             name=serve.name,
             env=env.name,
@@ -246,6 +464,7 @@ class DeploymentService:
             serve_infra_config=infra_config,
             environment_variables=environment_variables,
             is_environment_protected=env.is_protected,
+            deployment_strategy_config=deployment_strategy_config,
         )
 
         build_resp = await self.dcm_client.build_resource(
@@ -510,6 +729,18 @@ class DeploymentService:
         )
 
     async def deploy_model(self, request: ModelDeploymentRequest, user: User):
+        env = await Environment.get_or_none(name=request.env)
+        if not env:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Environment '{request.env}' not found. Please create it first."
+            )
+        await self.resource_validation_service.check_resources(
+            env=env,
+            required_cpu=float(request.cores) * request.min_replicas,
+            required_memory=float(request.memory) * request.min_replicas,
+        )
+
         # Validate model URI exists in MLflow before proceeding
         is_valid, error_msg = await self.mlflow_client.validate_model_uri(request.model_uri)
         if not is_valid:
@@ -520,14 +751,6 @@ class DeploymentService:
                     "error": error_msg,
                     "hint": "Please verify the model exists in MLflow and the URI is correct."
                 }
-            )
-
-        # Get environment from database
-        env = await Environment.get_or_none(name=request.env)
-        if not env:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Environment '{request.env}' not found. Please create it first."
             )
 
         env_config = EnvConfig(**env.env_configs)
@@ -632,22 +855,38 @@ class DeploymentService:
             tracking_password=self.config.mlflow_tracking_password,
         )
 
-        artifact_identifier = f"{env.name}-{serve.name}-{artifact.version}"
+        strategy = request.deployment_strategy or "rolling"
+        deployment_strategy_config = request.deployment_strategy_config
 
-        await self.dcm_client.build_resource(
-            darwin_resource=FASTAPI_SERVE_RESOURCE_NAME,
-            artifact_id=artifact_identifier,
-            values=values_json,
-            version=FASTAPI_SERVE_CHART_VERSION
-        )
-
-        await self.dcm_client.start_resource(
-            resource_id=serve.name,
-            artifact_id=artifact_identifier,
-            kube_cluster=env_config.cluster_name,
-            namespace=env_config.namespace,
-            darwin_resource=FASTAPI_SERVE_RESOURCE_NAME
-        )
+        if strategy == "blue_green":
+            await self.deployment_strategy_service.deploy_model_blue_green(
+                values=values_json,
+                serve=serve,
+                env=env,
+                artifact=artifact,
+            )
+        elif strategy == "canary":
+            await self.deployment_strategy_service.deploy_model_canary(
+                values=values_json,
+                serve=serve,
+                env=env,
+                artifact=artifact,
+            )
+        else:
+            artifact_identifier = f"{env.name}-{serve.name}-{artifact.version}"
+            await self.dcm_client.build_resource(
+                darwin_resource=FASTAPI_SERVE_RESOURCE_NAME,
+                artifact_id=artifact_identifier,
+                values=values_json,
+                version=FASTAPI_SERVE_CHART_VERSION,
+            )
+            await self.dcm_client.start_resource(
+                resource_id=serve.name,
+                artifact_id=artifact_identifier,
+                kube_cluster=env_config.cluster_name,
+                namespace=env_config.namespace,
+                darwin_resource=FASTAPI_SERVE_RESOURCE_NAME,
+            )
 
         async with in_transaction():
             deployment = await Deployment.create(
@@ -658,16 +897,33 @@ class DeploymentService:
             )
             await AppLayerDeployment.create(
                 deployment=deployment,
-                deployment_strategy=None,
-                deployment_params=None,
-                environment_variables=environment_variables
+                deployment_strategy=strategy,
+                deployment_params=deployment_strategy_config,
+                environment_variables=environment_variables,
             )
 
-        await self._update_active_deployment(serve, env, deployment)
+        if strategy == "canary":
+            await self.deployment_lock_service.update_lock_deployment_id(
+                serve_id=serve.id,
+                environment_id=env.id,
+                deployment_id=deployment.id,
+            )
 
-        return {
-            "service_url": get_service_url_for_one_click(serve.name, env_config)
-        }
+        active = await ActiveDeployment.get_or_none(serve=serve, environment=env)
+        if strategy in (None, "rolling"):
+            await self._update_active_deployment(serve, env, deployment)
+        elif strategy == "blue_green" and not active:
+            await ActiveDeployment.create(serve=serve, environment=env, deployment=deployment)
+        elif strategy == "canary" and not active:
+            await ActiveDeployment.create(serve=serve, environment=env, deployment=deployment)
+
+        service_url = get_service_url_for_one_click(serve.name, env_config)
+        result = {"service_url": service_url}
+        if strategy in ("canary", "blue_green"):
+            result["deployment_id"] = deployment.id
+            result["strategy"] = strategy
+            result["status"] = "deploying"
+        return result
 
     async def undeploy_model(self, request: ModelUndeployRequest) -> dict:
         """

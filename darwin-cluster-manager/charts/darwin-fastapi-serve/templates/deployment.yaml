@@ -18,17 +18,24 @@ spec:
   selector:
     matchLabels:
       {{- include "service-deployment.selectorLabels" . | nindent 6 }}
+      {{- if .Values.versionLabel }}
+      version: {{ .Values.versionLabel | quote }}
+      {{- end }}
   strategy:
     rollingUpdate:
-      maxSurge: {{ .Values.flagger.maxSurge }}
-      maxUnavailable: {{ .Values.flagger.maxUnavailable }}
+      maxSurge: {{ .Values.deploymentStrategyConfig.maxSurge | default "25%" }}
+      maxUnavailable: {{ .Values.deploymentStrategyConfig.maxUnavailable | default 0 }}
     type: RollingUpdate
   template:
     metadata:
       creationTimestamp: null
       labels:
         {{- include "service-deployment.selectorLabels" . | nindent 8 }}
+        {{- if .Values.versionLabel }}
+        version: {{ .Values.versionLabel | quote }}
+        {{- else }}
         role: rolling-update
+        {{- end }}
         {{- include "service-deployment.labels" . | nindent 8 }}
       annotations:
         {{- include "service-deployment.podAnnotations" . | nindent 8 }}

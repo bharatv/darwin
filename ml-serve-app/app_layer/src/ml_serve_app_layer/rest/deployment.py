@@ -2,14 +2,20 @@ from typing import Optional, List
 
 from fastapi import APIRouter
 
-from ml_serve_app_layer.dtos.requests import DeploymentRequest, APIServeDeploymentConfigRequest, \
-    WorkflowServeDeploymentConfigRequest, ModelDeploymentRequest, ModelUndeployRequest
+from ml_serve_app_layer.dtos.requests import (
+    DeploymentRequest,
+    APIServeDeploymentConfigRequest,
+    WorkflowServeDeploymentConfigRequest,
+    ModelDeploymentRequest,
+    ModelUndeployRequest,
+    RollbackRequest,
+    StepCanaryRequest,
+)
 from ml_serve_app_layer.utils.auth_utils import AuthorizedUser
 from ml_serve_app_layer.utils.response_util import Response
 from ml_serve_core.service.artifact_service import ArtifactService
 from ml_serve_core.service.deployment_service import DeploymentService
 from ml_serve_core.service.environment_service import EnvironmentService
-
 from ml_serve_core.service.serve_config_service import ServeConfigService
 from ml_serve_core.service.serve_service import ServeService
 from fastapi.responses import JSONResponse
@@ -33,6 +39,19 @@ class DeploymentRouter:
         self.router.get("/{serve_name}/deployments")(self.get_deployments)
         self.router.post("/deploy-model")(self.deploy_model)
         self.router.post("/undeploy-model")(self.undeploy_model)
+        self.router.post("/{serve_name}/deployments/{deployment_id}/promote")(
+            self.promote_deployment
+        )
+        self.router.post("/{serve_name}/deployments/{deployment_id}/abort")(
+            self.abort_deployment
+        )
+        self.router.post("/{serve_name}/deployments/{deployment_id}/step")(
+            self.step_canary
+        )
+        self.router.post("/{serve_name}/rollback")(self.rollback)
+        self.router.get("/{serve_name}/deployments/{deployment_id}/status")(
+            self.get_deployment_status
+        )
 
     async def get_deployments(self, serve_name: str, status: Optional[str] = None, page: int = 1,
                               limit: int = 50) -> JSONResponse:
@@ -164,6 +183,60 @@ class DeploymentRouter:
                 "environment": result["environment"]
             }
         )
+
+    async def promote_deployment(
+        self,
+        serve_name: str,
+        deployment_id: int,
+        user: AuthorizedUser,
+    ) -> JSONResponse:
+        """Promote canary or blue-green deployment to 100% traffic."""
+        result = await self.deployment_service.promote_deployment(deployment_id, user)
+        return Response.success_response(result["message"], result.get("data"))
+
+    async def abort_deployment(
+        self,
+        serve_name: str,
+        deployment_id: int,
+        user: AuthorizedUser,
+    ) -> JSONResponse:
+        """Abort canary deployment; traffic stays on stable."""
+        result = await self.deployment_service.abort_canary(deployment_id, user)
+        return Response.success_response(result["message"], result.get("data"))
+
+    async def step_canary(
+        self,
+        serve_name: str,
+        deployment_id: int,
+        request: StepCanaryRequest,
+        user: AuthorizedUser,
+    ) -> JSONResponse:
+        """Advance canary traffic to specified percentage."""
+        result = await self.deployment_service.step_canary_traffic(
+            deployment_id, request.traffic_percent, user
+        )
+        return Response.success_response(result["message"], result.get("data"))
+
+    async def rollback(
+        self,
+        serve_name: str,
+        request: RollbackRequest,
+        user: AuthorizedUser,
+    ) -> JSONResponse:
+        """Rollback to previous deployment version."""
+        result = await self.deployment_service.rollback_deployment(
+            serve_name, request.env, user
+        )
+        return Response.success_response(result["message"], result.get("data"))
+
+    async def get_deployment_status(
+        self,
+        serve_name: str,
+        deployment_id: int,
+    ) -> JSONResponse:
+        """Get deployment status (strategy, traffic split, versions)."""
+        result = await self.deployment_service.get_deployment_status(deployment_id)
+        return Response.success_response("Deployment status retrieved", result)
 
 
 deployment_router = DeploymentRouter().router

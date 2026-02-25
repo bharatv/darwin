@@ -291,6 +291,14 @@ class ModelDeploymentRequest(BaseModel):
         ..., min_length=1, description="URI of the model."
     )
     env: str = Field(..., description="Environment name (e.g., 'local', 'prod')")
+    deployment_strategy: Optional[Literal["rolling", "blue_green", "canary"]] = Field(
+        "rolling",
+        description="Deployment strategy: rolling (default), blue_green, or canary.",
+    )
+    deployment_strategy_config: Optional[dict] = Field(
+        None,
+        description="Strategy-specific config (e.g., maxSurge, maxUnavailable for rolling; initial_traffic_percent for canary).",
+    )
     storage_strategy: Optional[Literal["auto", "emptydir", "pvc"]] = Field(
         "auto",
         description="Storage strategy for model download: auto (default), emptydir, or pvc.",
@@ -360,6 +368,16 @@ class ModelDeploymentRequest(BaseModel):
             )
 
         return value
+
+
+class RollbackRequest(BaseModel):
+    """Request body for rollback endpoint."""
+    env: str = Field(..., description="Environment name (e.g., 'local', 'prod')")
+
+
+class StepCanaryRequest(BaseModel):
+    """Request body for canary step endpoint."""
+    traffic_percent: int = Field(..., ge=0, le=100, description="Traffic percentage for canary (0-100)")
 
 
 class ModelUndeployRequest(BaseModel):

@@ -5,7 +5,7 @@ Tests the artifact creation, building via artifact-builder, and
 deployment through DCM with mocked external dependencies.
 """
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 
 from ml_serve_app_layer.dtos.requests import (
@@ -312,6 +312,202 @@ class TestArtifactDeployment:
         deployment = await active.deployment
         artifact = await deployment.artifact
         assert artifact.id == test_artifact.id
+
+    @pytest.mark.asyncio
+    async def test_deploy_artifact_canary_does_not_update_active_deployment(
+        self,
+        db_session,
+        test_user,
+        test_serve,
+        test_artifact,
+        test_environment,
+        mock_dcm_client,
+    ):
+        """Test canary deployment does NOT update ActiveDeployment until promote."""
+        with patch(
+            "ml_serve_core.service.deployment_strategy_service.ENABLE_ISTIO", True
+        ), patch(
+            "ml_serve_core.service.deployment_strategy_service.DeploymentLockService"
+        ) as mock_lock_svc, patch(
+            "ml_serve_core.service.deployment_strategy_service.TrafficManagementService"
+        ) as mock_traffic_svc, patch(
+            "ml_serve_core.service.deployment_strategy_service.DCMClient"
+        ) as mock_dcm_strategy:
+            mock_lock_svc.return_value.acquire_lock = AsyncMock(return_value=MagicMock())
+            mock_lock_svc.return_value.release_lock = AsyncMock(return_value=None)
+            mock_lock_svc.return_value.update_lock_deployment_id = AsyncMock(return_value=None)
+            mock_traffic_svc.return_value.update_virtual_service = AsyncMock(
+                return_value=None
+            )
+            mock_traffic_svc.return_value.create_destination_rules = AsyncMock(
+                return_value=None
+            )
+            mock_dcm_strategy.return_value.build_resource = AsyncMock(
+                return_value={"body": {"status": "success"}}
+            )
+            mock_dcm_strategy.return_value.start_resource = AsyncMock(
+                return_value={"body": {"status": "running"}}
+            )
+
+            service = DeploymentService()
+            service.dcm_client = mock_dcm_client
+
+            # Create initial active deployment (stable)
+            prev_artifact = await Artifact.create(
+                serve=test_serve,
+                version="v0.9.0",
+                github_repo_url="https://github.com/test/repo",
+                branch="main",
+                image_url="localhost:5000/test-serve:v0.9.0",
+                created_by=test_user,
+            )
+            prev_deployment = await Deployment.create(
+                serve=test_serve,
+                artifact=prev_artifact,
+                environment=test_environment,
+                created_by=test_user,
+            )
+            await ActiveDeployment.create(
+                serve=test_serve,
+                environment=test_environment,
+                deployment=prev_deployment,
+            )
+
+            infra_config = await APIServeInfraConfig.create(
+                serve=test_serve,
+                environment=test_environment,
+                backend_type=BackendType.FastAPI.value,
+                fast_api_config={
+                    "cores": 2,
+                    "memory": 4,
+                    "min_replicas": 1,
+                    "max_replicas": 3,
+                    "node_capacity_type": "spot",
+                },
+                created_by=test_user,
+                updated_by=test_user,
+            )
+
+            deployment_config = APIServeDeploymentConfigRequest(
+                deployment_strategy="canary",
+                deployment_strategy_config={"initial_traffic_percent": 0},
+            )
+            deployment_request = DeploymentRequest(
+                env="test-env",
+                artifact_version=test_artifact.version,
+                api_serve_deployment_config=deployment_config,
+            )
+
+            await service.deploy_artifact(
+                serve=test_serve,
+                artifact=test_artifact,
+                serve_config=infra_config,
+                env=test_environment,
+                deployment_request=deployment_request,
+                user=test_user,
+            )
+
+            active = await ActiveDeployment.get(
+                serve=test_serve, environment=test_environment
+            )
+            deployment = await active.deployment
+            artifact = await deployment.artifact
+            assert artifact.version == "v0.9.0"
+
+    @pytest.mark.asyncio
+    async def test_deploy_artifact_blue_green_does_not_update_active_deployment(
+        self,
+        db_session,
+        test_user,
+        test_serve,
+        test_artifact,
+        test_environment,
+        mock_dcm_client,
+    ):
+        """Test blue-green deployment does NOT update ActiveDeployment until promote."""
+        with patch(
+            "ml_serve_core.service.deployment_strategy_service.ENABLE_ISTIO", True
+        ), patch(
+            "ml_serve_core.service.deployment_strategy_service.TrafficManagementService"
+        ) as mock_traffic_svc, patch(
+            "ml_serve_core.service.deployment_strategy_service.DCMClient"
+        ) as mock_dcm_strategy:
+            mock_traffic_svc.return_value.update_virtual_service = AsyncMock(
+                return_value=None
+            )
+            mock_traffic_svc.return_value.create_destination_rules = AsyncMock(
+                return_value=None
+            )
+            mock_dcm_strategy.return_value.build_resource = AsyncMock(
+                return_value={"body": {"status": "success"}}
+            )
+            mock_dcm_strategy.return_value.start_resource = AsyncMock(
+                return_value={"body": {"status": "running"}}
+            )
+
+            service = DeploymentService()
+            service.dcm_client = mock_dcm_client
+
+            prev_artifact = await Artifact.create(
+                serve=test_serve,
+                version="v0.9.0",
+                github_repo_url="https://github.com/test/repo",
+                branch="main",
+                image_url="localhost:5000/test-serve:v0.9.0",
+                created_by=test_user,
+            )
+            prev_deployment = await Deployment.create(
+                serve=test_serve,
+                artifact=prev_artifact,
+                environment=test_environment,
+                created_by=test_user,
+            )
+            await ActiveDeployment.create(
+                serve=test_serve,
+                environment=test_environment,
+                deployment=prev_deployment,
+            )
+
+            infra_config = await APIServeInfraConfig.create(
+                serve=test_serve,
+                environment=test_environment,
+                backend_type=BackendType.FastAPI.value,
+                fast_api_config={
+                    "cores": 2,
+                    "memory": 4,
+                    "min_replicas": 1,
+                    "max_replicas": 3,
+                    "node_capacity_type": "spot",
+                },
+                created_by=test_user,
+                updated_by=test_user,
+            )
+
+            deployment_config = APIServeDeploymentConfigRequest(
+                deployment_strategy="blue_green",
+                deployment_strategy_config={},
+            )
+            deployment_request = DeploymentRequest(
+                env="test-env",
+                artifact_version=test_artifact.version,
+                api_serve_deployment_config=deployment_config,
+            )
+
+            await service.deploy_artifact(
+                serve=test_serve,
+                artifact=test_artifact,
+                serve_config=infra_config,
+                env=test_environment,
+                deployment_request=deployment_request,
+                user=test_user,
+            )
+
+            active = await ActiveDeployment.get(
+                serve=test_serve, environment=test_environment
+            )
+            deployment = await active.deployment
+            artifact = await deployment.artifact
+            assert artifact.version == "v0.9.0"
 
 
 @pytest.mark.unit

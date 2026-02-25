@@ -185,3 +185,53 @@ def mock_http_client():
         "body": {"status": "updated"}
     }
     return client
+
+
+# --- Advanced Deployment Strategies fixtures ---
+
+@pytest.fixture
+def mock_deployment_lock_service():
+    """Mock DeploymentLockService for unit tests."""
+    service = AsyncMock()
+    service.acquire_lock = AsyncMock(return_value=MagicMock())
+    service.release_lock = AsyncMock(return_value=None)
+    service.is_locked = AsyncMock(return_value=False)
+    return service
+
+
+@pytest.fixture
+def mock_traffic_management_service():
+    """Mock TrafficManagementService for unit tests."""
+    service = AsyncMock()
+    service.update_virtual_service = AsyncMock(return_value=None)
+    service.create_destination_rules = AsyncMock(return_value=None)
+    service.calculate_traffic_split = MagicMock(return_value={"stable": 100, "canary": 0})
+    return service
+
+
+@pytest.fixture
+def mock_kubernetes_client():
+    """Mock KubernetesClient for Istio resources."""
+    client = AsyncMock()
+    client.apply_virtual_service = AsyncMock(return_value=None)
+    client.apply_destination_rule = AsyncMock(return_value=None)
+    return client
+
+
+@pytest.fixture
+def mock_metrics_service():
+    """Mock MetricsService for unit tests."""
+    service = AsyncMock()
+    service.collect_metrics = AsyncMock(return_value=[])
+    service.store_metrics = AsyncMock(return_value=None)
+    service.get_metrics = AsyncMock(return_value=[])
+    service.cleanup_old_metrics = AsyncMock(return_value=0)
+    return service
+
+
+@pytest.fixture
+def mock_resource_validation_service():
+    """Mock ResourceValidationService for unit tests."""
+    service = AsyncMock()
+    service.check_resources = AsyncMock(return_value=True)
+    return service

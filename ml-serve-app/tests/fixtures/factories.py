@@ -4,6 +4,7 @@ Test data factories for creating model instances.
 These factories provide convenient methods for creating test data
 with sensible defaults while allowing customization.
 """
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from ml_serve_model import Serve, Environment, Artifact, User, Deployment
 from ml_serve_model.enums import ServeType, DeploymentStatus, BackendType
@@ -217,6 +218,82 @@ class AppLayerDeploymentFactory:
             deployment_strategy=deployment_strategy,
             deployment_params=deployment_params,
             environment_variables=environment_variables,
+            **kwargs
+        )
+
+
+def _get_deployment_lock_model():
+    """Lazy import for DeploymentLock (may not exist until implementation)."""
+    try:
+        from ml_serve_model.deployment_lock import DeploymentLock
+        return DeploymentLock
+    except ImportError:
+        return None
+
+
+def _get_deployment_metric_model():
+    """Lazy import for DeploymentMetric (may not exist until implementation)."""
+    try:
+        from ml_serve_model.deployment_metric import DeploymentMetric
+        return DeploymentMetric
+    except ImportError:
+        return None
+
+
+class DeploymentLockFactory:
+    """Factory for creating DeploymentLock instances (advanced deployment strategies)."""
+
+    @staticmethod
+    async def create(
+        serve_id: int,
+        environment_id: int,
+        deployment_id: Optional[int] = None,
+        locked_at: Optional[datetime] = None,
+        locked_by: Optional[int] = None,
+        **kwargs
+    ):
+        """Create a deployment lock."""
+        DeploymentLock = _get_deployment_lock_model()
+        if DeploymentLock is None:
+            raise ImportError("DeploymentLock model not yet implemented")
+        if locked_at is None:
+            locked_at = datetime.now(timezone.utc)
+        return await DeploymentLock.create(
+            serve_id=serve_id,
+            environment_id=environment_id,
+            deployment_id=deployment_id,
+            locked_at=locked_at,
+            locked_by=locked_by,
+            **kwargs
+        )
+
+
+class DeploymentMetricFactory:
+    """Factory for creating DeploymentMetric instances (advanced deployment strategies)."""
+
+    @staticmethod
+    async def create(
+        deployment_id: int,
+        metric_name: str = "request_rate",
+        value: float = 100.0,
+        timestamp: Optional[datetime] = None,
+        labels: Optional[Dict[str, str]] = None,
+        **kwargs
+    ):
+        """Create a deployment metric."""
+        DeploymentMetric = _get_deployment_metric_model()
+        if DeploymentMetric is None:
+            raise ImportError("DeploymentMetric model not yet implemented")
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc)
+        if labels is None:
+            labels = {}
+        return await DeploymentMetric.create(
+            deployment_id=deployment_id,
+            metric_name=metric_name,
+            value=value,
+            timestamp=timestamp,
+            labels=labels,
             **kwargs
         )
 
