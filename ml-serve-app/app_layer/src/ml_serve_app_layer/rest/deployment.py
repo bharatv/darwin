@@ -1,9 +1,11 @@
 from typing import Optional, List
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from ml_serve_app_layer.dtos.requests import DeploymentRequest, APIServeDeploymentConfigRequest, \
     WorkflowServeDeploymentConfigRequest, ModelDeploymentRequest, ModelUndeployRequest
+from ml_serve_app_layer.dtos.responses import CanaryStatusResponse, PromotionResponse, RollbackResponse
 from ml_serve_app_layer.utils.auth_utils import AuthorizedUser
 from ml_serve_app_layer.utils.response_util import Response
 from ml_serve_core.service.artifact_service import ArtifactService
@@ -16,6 +18,18 @@ from fastapi.responses import JSONResponse
 
 from ml_serve_model import Deployment
 from ml_serve_model.enums import ServeType
+
+
+class PromoteRequest(BaseModel):
+    """Request model for canary promotion."""
+    env: str
+    confirm: bool = True
+
+
+class RollbackRequest(BaseModel):
+    """Request model for rollback."""
+    env: str
+    target_version: Optional[str] = None
 
 
 class DeploymentRouter:
@@ -33,6 +47,9 @@ class DeploymentRouter:
         self.router.get("/{serve_name}/deployments")(self.get_deployments)
         self.router.post("/deploy-model")(self.deploy_model)
         self.router.post("/undeploy-model")(self.undeploy_model)
+        self.router.get("/{serve_name}/canary-status")(self.get_canary_status)
+        self.router.post("/{serve_name}/promote")(self.promote_canary)
+        self.router.post("/{serve_name}/rollback")(self.rollback_deployment)
 
     async def get_deployments(self, serve_name: str, status: Optional[str] = None, page: int = 1,
                               limit: int = 50) -> JSONResponse:
@@ -164,6 +181,75 @@ class DeploymentRouter:
                 "environment": result["environment"]
             }
         )
+
+    async def get_canary_status(
+            self,
+            serve_name: str,
+            env: str = Query(..., description="Environment name"),
+            user: AuthorizedUser = None
+    ) -> JSONResponse:
+        """
+        Get the status of a canary deployment.
+        
+        Returns real-time canary analysis state including traffic weights,
+        iterations, and promotion status.
+        """
+        try:
+            status = await self.deployment_service.get_canary_status(serve_name, env)
+            return Response.success_response(
+                f"Canary status for {serve_name} in {env}",
+                status
+            )
+        except Exception as e:
+            return Response.bad_request_error_response(str(e))
+    
+    async def promote_canary(
+            self,
+            serve_name: str,
+            request: PromoteRequest,
+            user: AuthorizedUser
+    ) -> JSONResponse:
+        """
+        Approve canary/blue-green promotion.
+        
+        Triggers Flagger to proceed with traffic shifting or instant cutover.
+        """
+        if not request.confirm:
+            return Response.bad_request_error_response("Promotion must be explicitly confirmed")
+        
+        try:
+            result = await self.deployment_service.approve_canary_promotion(
+                serve_name, request.env, user
+            )
+            return Response.success_response(
+                result["message"],
+                result
+            )
+        except Exception as e:
+            return Response.bad_request_error_response(str(e))
+    
+    async def rollback_deployment(
+            self,
+            serve_name: str,
+            request: RollbackRequest,
+            user: AuthorizedUser
+    ) -> JSONResponse:
+        """
+        Rollback to a previous deployment version.
+        
+        If target_version is provided, rolls back to that specific version.
+        Otherwise, rolls back to the most recent previous deployment.
+        """
+        try:
+            result = await self.deployment_service.rollback_to_previous(
+                serve_name, request.env, user, request.target_version
+            )
+            return Response.success_response(
+                result["message"],
+                result
+            )
+        except Exception as e:
+            return Response.bad_request_error_response(str(e))
 
 
 deployment_router = DeploymentRouter().router

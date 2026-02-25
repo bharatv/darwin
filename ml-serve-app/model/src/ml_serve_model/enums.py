@@ -29,3 +29,9 @@ class JobStatus(Enum):
 class DeploymentStatus(Enum):
     ACTIVE = "ACTIVE"
     ENDED = "ENDED"
+
+
+class DeploymentStrategy(Enum):
+    ROLLING = "rolling"
+    CANARY = "canary"
+    BLUE_GREEN = "blue-green"

@@ -13,6 +13,15 @@ pdb:
   enabled: true
   minAvailable: 1
 
+# Deployment strategy configuration
+deploymentStrategy:
+  type: rolling  # rolling | canary | blue-green
+
+# Rolling update parameters (used when deploymentStrategy.type is 'rolling')
+rollingUpdate:
+  maxSurge: 1
+  maxUnavailable: 0
+
 # TODO add envs as per the requirements
 envs:
   ENV: ENV_NAME
@@ -127,6 +136,18 @@ org: ORGANIZATION_NAME
 # Slack notifications flagger
 flagger:
   enabled: false
+  type: canary  # canary | blue-green
+  interval: 1m
+  threshold: 5
+  maxWeight: 50
+  stepWeight: 10
+  progressDeadlineSeconds: 600
+  manualPromotion: false
+  skipAnalysis: false
+  maxSurge: 10%
+  maxUnavailable: 1
+  slackChannel: darwin-serve-alerts
+  metrics: []
 
 istio:
   enabled: ENABLE_ISTIO

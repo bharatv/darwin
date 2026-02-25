@@ -213,7 +213,9 @@ def generate_fastapi_values(
         user_email: str,
         serve_infra_config: APIServeInfraConfig,
         environment_variables: Optional[dict[str, str]],
-        is_environment_protected: bool
+        is_environment_protected: bool,
+        deployment_strategy: Optional[str] = None,
+        deployment_params: Optional[dict] = None
 ) -> dict:
     with pkg_resource.open_text(rs, FASTAPI_VALUES_TEMPLATE_NAME) as stream:
         stream_content = stream.read()
@@ -273,6 +275,10 @@ def generate_fastapi_values(
         serve_infra_config.fast_api_config_object.memory
     )
     update_node_selector(values, serve_infra_config.fast_api_config_object.node_capacity_type)
+    
+    # Apply deployment strategy configuration
+    apply_deployment_strategy(values, deployment_strategy, deployment_params)
+    
     return values
 
 
@@ -347,4 +353,64 @@ def update_node_selector(group, node_capacity_type):
     else:
         group["nodeSelector"]["karpenter.sh/capacity-type"] = "spot"
     group['nodeSelector']['serve'] = "true"
+
+
+def apply_deployment_strategy(values: dict, strategy: Optional[str], params: Optional[dict]) -> None:
+    """
+    Apply deployment strategy configuration to Helm values.
+    
+    Configures the values dict for rolling, canary, or blue-green deployment strategies.
+    Modifies the values dict in-place.
+    
+    Args:
+        values: The Helm values dict to modify
+        strategy: Deployment strategy ('rolling', 'canary', 'blue-green'), or None for default
+        params: Strategy-specific configuration parameters
+    """
+    if not strategy:
+        strategy = "rolling"
+    
+    if not params:
+        params = {}
+    
+    # Initialize deployment strategy and rolling update sections
+    values['deploymentStrategy'] = {'type': strategy}
+    values['rollingUpdate'] = {
+        'maxSurge': 1,
+        'maxUnavailable': 0
+    }
+    
+    if strategy == "rolling":
+        # Configure standard Kubernetes RollingUpdate
+        values['rollingUpdate']['maxSurge'] = params.get('maxSurge', 1)
+        values['rollingUpdate']['maxUnavailable'] = params.get('maxUnavailable', 0)
+        values['flagger']['enabled'] = False
+    
+    elif strategy == "canary":
+        # Enable Flagger canary mode with progressive traffic shifting
+        values['flagger']['enabled'] = True
+        values['flagger']['type'] = 'canary'
+        values['flagger']['interval'] = params.get('interval', '1m')
+        values['flagger']['threshold'] = params.get('threshold', 5)
+        values['flagger']['maxWeight'] = params.get('maxWeight', 50)
+        values['flagger']['stepWeight'] = params.get('stepWeight', 10)
+        values['flagger']['manualPromotion'] = params.get('manualPromotion', False)
+        values['flagger']['progressDeadlineSeconds'] = params.get('progressDeadlineSeconds', 600)
+        values['flagger']['skipAnalysis'] = params.get('skipAnalysis', False)
+        
+        # Configure metrics if provided
+        if 'metrics' in params and params['metrics']:
+            values['flagger']['metrics'] = params['metrics']
+    
+    elif strategy == "blue-green":
+        # Enable Flagger blue-green mode with instant cutover
+        values['flagger']['enabled'] = True
+        values['flagger']['type'] = 'blue-green'
+        values['flagger']['manualPromotion'] = params.get('manualPromotion', True)
+        values['flagger']['progressDeadlineSeconds'] = params.get('progressDeadlineSeconds', 600)
+        
+        # Blue-green doesn't use stepWeight/maxWeight
+        if 'promoteAfter' in params:
+            values['flagger']['promoteAfter'] = params['promoteAfter']
+
 

@@ -11,7 +11,7 @@ spec:
     name: {{ include "service-deployment.fullname" . }}
   # the maximum time in seconds for the canary deployment
   # to make progress before it is rollback (default 600s)
-  progressDeadlineSeconds: {{ .Values.flagger.progressDeadlineSeconds }}
+  progressDeadlineSeconds: {{ .Values.flagger.progressDeadlineSeconds | default 600 }}
   # HPA reference (optional)
   autoscalerRef:
     apiVersion: autoscaling/v2beta2
@@ -44,26 +44,61 @@ spec:
     interval: {{ .Values.flagger.interval }}
     # max number of failed metric checks before rollback
     threshold: {{ .Values.flagger.threshold }}
+    {{- if eq .Values.flagger.type "canary" }}
     # max traffic percentage routed to canary
     # percentage (0-100)
-    {{- if eq .Values.flagger.type "canary" }}
     maxWeight: {{ .Values.flagger.maxWeight }}
     # canary increment step
     # percentage (0-100)
     stepWeight: {{ .Values.flagger.stepWeight }}
-    {{- else if eq .Values.flagger.type "immute" }}
-    iterations : {{ .Values.flagger.iterations }}
+    {{- else if eq .Values.flagger.type "blue-green" }}
+    # blue-green deployment with instant cutover
+    iterations: {{ .Values.flagger.iterations | default 10 }}
     {{- end }}
+    {{- if .Values.flagger.skipAnalysis }}
+    # skip analysis and promote immediately
+    skipAnalysis: true
+    {{- end }}
+    {{- if .Values.flagger.metrics }}
     metrics:
     {{- range $value := $.Values.flagger.metrics }}
     - name: {{ $value.name }}
+      {{- if $value.templateRef }}
       templateRef:
-        name: {{ $.Release.Namespace }}-{{ template "service-deployment.fullname" $ }}-{{ $value.name }}
-        namespace: monitoring
+        name: {{ $value.templateRef.name }}
+        namespace: {{ $value.templateRef.namespace | default "monitoring" }}
+      {{- else if $value.templateVariables }}
+      templateVariables:
+        {{- toYaml $value.templateVariables | nindent 8 }}
+      {{- end }}
       thresholdRange:
+        {{- if $value.thresholdRange.min }}
+        min: {{ $value.thresholdRange.min }}
+        {{- end }}
+        {{- if $value.thresholdRange.max }}
         max: {{ $value.thresholdRange.max }}
+        {{- end }}
       interval: {{ $value.interval }}
     {{- end }}
+    {{- else }}
+    # Default metric for canary analysis (Datadog-based)
+    metrics:
+    - name: sidecar-error-rate-measure
+      templateRef:
+        name: {{ $.Release.Namespace }}-{{ template "service-deployment.fullname" $ }}-sidecar-error-rate-measure
+        namespace: monitoring
+      thresholdRange:
+        max: 1
+      interval: 1m
+    {{- end }}
+    {{- if .Values.flagger.manualPromotion }}
+    # Manual promotion webhook
+    webhooks:
+    - name: manual-promotion-gate
+      type: confirm-promotion
+      url: http://ml-serve-app.darwin/api/v1/deployment/{{ .Values.name }}/promotion-gate
+    {{- end }}
+{{- if not .Values.flagger.metrics }}
 ---
 apiVersion: flagger.app/v1beta1
 kind: MetricTemplate
@@ -78,5 +113,5 @@ spec:
       name: datadog-flagger
   query: |-
     {{ printf "100-sum:sidecar.istio_requests_total{cluster_name:%s,kube_deployment:%s*,kube_namespace:%s,response_code:2*}/sum:sidecar.istio_requests_total{cluster_name:%s,kube_deployment:%s*,kube_namespace:%s}*100" (.Values.cluster_name) ( include "service-deployment.fullname" .) (.Release.Namespace) (.Values.cluster_name) ( include "service-deployment.fullname" .) (.Release.Namespace)  }}
-
+{{- end }}
 {{- end }}

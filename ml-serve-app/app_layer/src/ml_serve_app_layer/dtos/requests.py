@@ -209,10 +209,65 @@ class ServeConfigRequest(BaseModel):
 
 
 class APIServeDeploymentConfigRequest(BaseModel):
-    deployment_strategy: Optional[str] = Field(None, description="Deployment strategy for the API serve.")
-    deployment_strategy_config: Optional[dict] = Field(None,
-                                                       description="Deployment strategy configuration for the API serve.")
+    deployment_strategy: Optional[Literal["rolling", "canary", "blue-green"]] = Field(
+        None, 
+        description="Deployment strategy for the API serve. Options: rolling (default), canary, blue-green."
+    )
+    deployment_strategy_config: Optional[dict] = Field(
+        None,
+        description="Deployment strategy configuration. Schema varies by strategy type."
+    )
     environment_variables: Optional[dict] = Field(None, description="Environment variables for the API serve.")
+
+    @field_validator("deployment_strategy_config")
+    def validate_strategy_config(cls, value, info):
+        if value is None:
+            return value
+        
+        strategy = info.data.get("deployment_strategy")
+        if not strategy:
+            return value
+        
+        # Validate rolling strategy config
+        if strategy == "rolling":
+            allowed_keys = {"maxSurge", "maxUnavailable"}
+            provided_keys = set(value.keys())
+            invalid = provided_keys - allowed_keys
+            if invalid:
+                raise ValueError(f"Invalid keys for rolling strategy: {invalid}. Allowed: {allowed_keys}")
+        
+        # Validate canary strategy config
+        elif strategy == "canary":
+            required_keys = {"stepWeight", "maxWeight", "interval"}
+            optional_keys = {"threshold", "manualPromotion", "progressDeadlineSeconds", "metrics", "skipAnalysis"}
+            allowed_keys = required_keys | optional_keys
+            provided_keys = set(value.keys())
+            
+            missing = required_keys - provided_keys
+            if missing:
+                raise ValueError(f"Missing required keys for canary strategy: {missing}")
+            
+            invalid = provided_keys - allowed_keys
+            if invalid:
+                raise ValueError(f"Invalid keys for canary strategy: {invalid}. Allowed: {allowed_keys}")
+            
+            # Validate types
+            if not isinstance(value.get("stepWeight"), int) or value["stepWeight"] <= 0 or value["stepWeight"] > 100:
+                raise ValueError("stepWeight must be an integer between 1 and 100")
+            if not isinstance(value.get("maxWeight"), int) or value["maxWeight"] <= 0 or value["maxWeight"] > 100:
+                raise ValueError("maxWeight must be an integer between 1 and 100")
+            if value["stepWeight"] > value["maxWeight"]:
+                raise ValueError("stepWeight cannot be greater than maxWeight")
+        
+        # Validate blue-green strategy config
+        elif strategy == "blue-green":
+            allowed_keys = {"manualPromotion", "promoteAfter", "progressDeadlineSeconds"}
+            provided_keys = set(value.keys())
+            invalid = provided_keys - allowed_keys
+            if invalid:
+                raise ValueError(f"Invalid keys for blue-green strategy: {invalid}. Allowed: {allowed_keys}")
+        
+        return value
 
 
 class WorkflowServeDeploymentConfigRequest(BaseModel):

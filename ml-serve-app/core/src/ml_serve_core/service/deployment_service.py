@@ -49,6 +49,59 @@ class DeploymentService:
         sanitized = re.sub(r"-+", "-", sanitized).strip("-")
         return sanitized
 
+    @staticmethod
+    def validate_deployment_strategy(strategy: Optional[str], params: Optional[dict], env: Environment) -> None:
+        """
+        Validate deployment strategy and its parameters.
+        
+        Args:
+            strategy: Deployment strategy ('rolling', 'canary', 'blue-green')
+            params: Strategy-specific configuration parameters
+            env: Environment object
+            
+        Raises:
+            HTTPException: If validation fails
+        """
+        if not strategy:
+            return  # Default to rolling, no validation needed
+        
+        # Check if advanced strategies require Istio/Flagger
+        if strategy in ["canary", "blue-green"]:
+            env_configs = env.env_configs
+            
+            # Check for Istio/Flagger flags in environment config
+            # Note: These flags should be added to Environment model
+            istio_enabled = env_configs.get("istio_enabled", False)
+            flagger_enabled = env_configs.get("flagger_enabled", False)
+            
+            if not istio_enabled:
+                logger.warning(f"Canary/Blue-Green strategy requested but Istio may not be enabled in {env.name}")
+                # Don't fail - allow deployment attempt, but warn
+            
+            if not flagger_enabled:
+                logger.warning(f"Canary/Blue-Green strategy requested but Flagger may not be enabled in {env.name}")
+                # Don't fail - allow deployment attempt, but warn
+        
+        # Validate strategy-specific parameters
+        if strategy == "canary" and params:
+            required = ["stepWeight", "maxWeight", "interval"]
+            missing = [k for k in required if k not in params]
+            if missing:
+                raise HTTPException(400, f"Canary strategy missing required parameters: {missing}")
+            
+            # Validate ranges
+            step_weight = params.get("stepWeight")
+            max_weight = params.get("maxWeight")
+            
+            if step_weight and (step_weight <= 0 or step_weight > 100):
+                raise HTTPException(400, f"stepWeight must be between 1 and 100, got {step_weight}")
+            
+            if max_weight and (max_weight <= 0 or max_weight > 100):
+                raise HTTPException(400, f"maxWeight must be between 1 and 100, got {max_weight}")
+            
+            if step_weight and max_weight and step_weight > max_weight:
+                raise HTTPException(400, f"stepWeight ({step_weight}) cannot be greater than maxWeight ({max_weight})")
+
     def _default_space(self, user: User) -> str:
         username = (user.username or "").replace("@", "-")
         sanitized = self._sanitize_identifier(username) if username else "one-click"
@@ -235,8 +288,16 @@ class DeploymentService:
     ):
         if api_deployment_config is None:
             environment_variables = None
+            deployment_strategy = None
+            deployment_params = None
         else:
             environment_variables = api_deployment_config.environment_variables
+            deployment_strategy = api_deployment_config.deployment_strategy
+            deployment_params = api_deployment_config.deployment_strategy_config
+        
+        # Validate deployment strategy
+        self.validate_deployment_strategy(deployment_strategy, deployment_params, env)
+        
         values_json = generate_fastapi_values(
             name=serve.name,
             env=env.name,
@@ -246,6 +307,8 @@ class DeploymentService:
             serve_infra_config=infra_config,
             environment_variables=environment_variables,
             is_environment_protected=env.is_protected,
+            deployment_strategy=deployment_strategy,
+            deployment_params=deployment_params
         )
 
         build_resp = await self.dcm_client.build_resource(
@@ -263,9 +326,18 @@ class DeploymentService:
             darwin_resource=FASTAPI_SERVE_RESOURCE_NAME
         )
 
-        return {
+        response = {
             "service_url": get_service_url(serve.name, env.name, EnvConfig(**env.env_configs), env.is_protected)
         }
+        
+        # Add canary-specific URLs if using canary or blue-green strategy
+        if deployment_strategy in ["canary", "blue-green"]:
+            response["deployment_strategy"] = deployment_strategy
+            response["canary_status_url"] = f"/api/v1/deployment/{serve.name}/canary-status?env={env.name}"
+            if deployment_params and deployment_params.get("manualPromotion"):
+                response["promotion_url"] = f"/api/v1/deployment/{serve.name}/promote"
+        
+        return response
 
     async def deploy_workflow_serve(
             self,
@@ -744,4 +816,245 @@ class DeploymentService:
             "message": f"Undeploy initiated for model serve '{serve_name}' in environment '{request.env}'",
             "serve_name": serve_name,
             "environment": request.env
+        }
+
+    async def get_canary_status(self, serve_name: str, env_name: str) -> dict:
+        """
+        Get the status of a canary deployment.
+        
+        Args:
+            serve_name: Name of the serve
+            env_name: Environment name
+            
+        Returns:
+            Dict with canary status information
+            
+        Raises:
+            HTTPException: If serve, environment not found or no active deployment
+        """
+        from ml_serve_core.client.flagger_client import FlaggerClient
+        
+        serve = await Serve.get_or_none(name=serve_name)
+        if not serve:
+            raise HTTPException(404, f"Serve '{serve_name}' not found")
+        
+        env = await Environment.get_or_none(name=env_name)
+        if not env:
+            raise HTTPException(404, f"Environment '{env_name}' not found")
+        
+        active_deployment = await ActiveDeployment.get_or_none(serve=serve, environment=env)
+        if not active_deployment:
+            raise HTTPException(404, f"No active deployment for '{serve_name}' in '{env_name}'")
+        
+        deployment = await active_deployment.deployment
+        app_layer_deployment = await AppLayerDeployment.get_or_none(deployment=deployment)
+        
+        if not app_layer_deployment or app_layer_deployment.deployment_strategy not in ["canary", "blue-green"]:
+            raise HTTPException(400, "Active deployment is not using canary or blue-green strategy")
+        
+        # Query Flagger for canary status
+        env_config = EnvConfig(**env.env_configs)
+        flagger_client = FlaggerClient()
+        
+        # Canary name format: {env}-{serve} or just {serve} for protected envs
+        canary_name = f"{env.name}-{serve.name}" if not env.is_protected else serve.name
+        
+        try:
+            canary_status = await flagger_client.get_canary_status(
+                canary_name=canary_name,
+                namespace=env_config.namespace
+            )
+            
+            if not canary_status:
+                return {
+                    "serve_name": serve_name,
+                    "environment": env_name,
+                    "deployment_strategy": app_layer_deployment.deployment_strategy,
+                    "phase": "NotFound",
+                    "canary_weight": 0,
+                    "stable_weight": 100,
+                    "iterations": 0,
+                    "failed_checks": 0,
+                    "awaiting_promotion": False,
+                    "canary_ready": False,
+                    "message": "Canary resource not found in Kubernetes"
+                }
+            
+            awaiting_promotion = await flagger_client.is_waiting_for_promotion(canary_name, env_config.namespace)
+            canary_ready = await flagger_client.is_canary_ready(canary_name, env_config.namespace)
+            
+            return {
+                "serve_name": serve_name,
+                "environment": env_name,
+                "deployment_strategy": app_layer_deployment.deployment_strategy,
+                "phase": canary_status.get("phase"),
+                "canary_weight": canary_status.get("canary_weight", 0),
+                "stable_weight": 100 - canary_status.get("canary_weight", 0),
+                "iterations": canary_status.get("iterations", 0),
+                "failed_checks": canary_status.get("failed_checks", 0),
+                "awaiting_promotion": awaiting_promotion,
+                "canary_ready": canary_ready,
+                "last_transition_time": canary_status.get("last_transition_time"),
+                "message": f"Canary is in {canary_status.get('phase')} phase"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching canary status: {e}")
+            raise HTTPException(500, f"Failed to fetch canary status: {str(e)}")
+    
+    async def approve_canary_promotion(self, serve_name: str, env_name: str, user: User) -> dict:
+        """
+        Approve a canary promotion to proceed with traffic shifting.
+        
+        Args:
+            serve_name: Name of the serve
+            env_name: Environment name
+            user: User approving the promotion
+            
+        Returns:
+            Dict with promotion status
+            
+        Raises:
+            HTTPException: If promotion fails or deployment not in valid state
+        """
+        from ml_serve_core.client.flagger_client import FlaggerClient
+        from ml_serve_model.deployment_events import DeploymentEvent
+        
+        serve = await Serve.get_or_none(name=serve_name)
+        if not serve:
+            raise HTTPException(404, f"Serve '{serve_name}' not found")
+        
+        env = await Environment.get_or_none(name=env_name)
+        if not env:
+            raise HTTPException(404, f"Environment '{env_name}' not found")
+        
+        active_deployment = await ActiveDeployment.get_or_none(serve=serve, environment=env)
+        if not active_deployment:
+            raise HTTPException(404, f"No active deployment for '{serve_name}' in '{env_name}'")
+        
+        deployment = await active_deployment.deployment
+        app_layer_deployment = await AppLayerDeployment.get_or_none(deployment=deployment)
+        
+        if not app_layer_deployment or app_layer_deployment.deployment_strategy not in ["canary", "blue-green"]:
+            raise HTTPException(400, "Active deployment is not using canary or blue-green strategy")
+        
+        # Approve via Flagger
+        env_config = EnvConfig(**env.env_configs)
+        flagger_client = FlaggerClient()
+        
+        canary_name = f"{env.name}-{serve.name}" if not env.is_protected else serve.name
+        
+        success = await flagger_client.approve_canary_promotion(canary_name, env_config.namespace)
+        
+        if success:
+            # Record promotion event
+            await DeploymentEvent.create(
+                deployment=deployment,
+                event_type="promotion_approved",
+                event_data={
+                    "approved_by": user.username,
+                    "canary_name": canary_name,
+                    "namespace": env_config.namespace
+                }
+            )
+            
+            logger.info(f"Canary promotion approved for {serve_name} in {env_name} by {user.username}")
+            
+            return {
+                "status": "accepted",
+                "serve_name": serve_name,
+                "environment": env_name,
+                "message": "Canary promotion approved. Traffic shifting will continue.",
+                "canary_status_url": f"/api/v1/deployment/{serve_name}/canary-status?env={env_name}"
+            }
+        else:
+            raise HTTPException(500, "Failed to approve canary promotion")
+    
+    async def rollback_to_previous(self, serve_name: str, env_name: str, user: User, target_version: Optional[str] = None) -> dict:
+        """
+        Rollback to a previous deployment version.
+        
+        Args:
+            serve_name: Name of the serve
+            env_name: Environment name
+            user: User initiating the rollback
+            target_version: Optional specific version to rollback to. If None, uses previous deployment.
+            
+        Returns:
+            Dict with rollback status
+            
+        Raises:
+            HTTPException: If no previous deployment exists or rollback fails
+        """
+        from ml_serve_model.deployment_events import DeploymentEvent
+        
+        serve = await Serve.get_or_none(name=serve_name)
+        if not serve:
+            raise HTTPException(404, f"Serve '{serve_name}' not found")
+        
+        env = await Environment.get_or_none(name=env_name)
+        if not env:
+            raise HTTPException(404, f"Environment '{env_name}' not found")
+        
+        active_deployment_record = await ActiveDeployment.get_or_none(serve=serve, environment=env)
+        if not active_deployment_record:
+            raise HTTPException(404, f"No active deployment for '{serve_name}' in '{env_name}'")
+        
+        # Determine target deployment to rollback to
+        if target_version:
+            target_deployment = await self.get_deployment_from_name_and_env_and_version(
+                serve_name, env_name, target_version
+            )
+            if not target_deployment:
+                raise HTTPException(404, f"No deployment found for version '{target_version}'")
+        else:
+            if not active_deployment_record.previous_deployment:
+                raise HTTPException(400, "No previous deployment to rollback to")
+            target_deployment = await active_deployment_record.previous_deployment
+        
+        target_artifact = await target_deployment.artifact
+        
+        # Get serve config
+        serve_config = await APIServeInfraConfig.get_or_none(serve=serve, environment=env)
+        if not serve_config:
+            raise HTTPException(404, "Serve infrastructure config not found")
+        
+        # Get previous deployment config
+        previous_app_deployment = await AppLayerDeployment.get_or_none(deployment=target_deployment)
+        
+        # Redeploy the previous version
+        logger.info(f"Rolling back {serve_name} in {env_name} to version {target_artifact.version}")
+        
+        deployment_config = APIServeDeploymentConfigRequest(
+            environment_variables=previous_app_deployment.environment_variables if previous_app_deployment else None,
+            deployment_strategy=previous_app_deployment.deployment_strategy if previous_app_deployment else None,
+            deployment_strategy_config=previous_app_deployment.deployment_params if previous_app_deployment else None
+        )
+        
+        # Deploy the previous version
+        new_deployment, deploy_resp = await self.deploy_api_serve(
+            serve, target_artifact, env, serve_config, deployment_config, user
+        )
+        
+        # Update active deployment
+        await self._update_active_deployment(serve, env, new_deployment)
+        
+        # Record rollback event
+        await DeploymentEvent.create(
+            deployment=new_deployment,
+            event_type="rollback_initiated",
+            event_data={
+                "initiated_by": user.username,
+                "rolled_back_to_version": target_artifact.version,
+                "from_deployment_id": (await active_deployment_record.deployment).id
+            }
+        )
+        
+        return {
+            "status": "initiated",
+            "serve_name": serve_name,
+            "environment": env_name,
+            "rolled_back_to_version": target_artifact.version,
+            "message": f"Rollback to version {target_artifact.version} initiated successfully",
+            "service_url": deploy_resp.get("service_url") if deploy_resp else None
         }

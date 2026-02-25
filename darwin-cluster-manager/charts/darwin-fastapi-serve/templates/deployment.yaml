@@ -18,11 +18,13 @@ spec:
   selector:
     matchLabels:
       {{- include "service-deployment.selectorLabels" . | nindent 6 }}
+  {{- if not .Values.flagger.enabled }}
   strategy:
-    rollingUpdate:
-      maxSurge: {{ .Values.flagger.maxSurge }}
-      maxUnavailable: {{ .Values.flagger.maxUnavailable }}
     type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ .Values.rollingUpdate.maxSurge | default 1 }}
+      maxUnavailable: {{ .Values.rollingUpdate.maxUnavailable | default 0 }}
+  {{- end }}
   template:
     metadata:
       creationTimestamp: null
@@ -202,7 +204,20 @@ spec:
           name: app-port
           protocol: TCP
         readinessProbe:
+          {{- if .Values.flagger.enabled }}
+          # Use /ready endpoint for canary/blue-green to ensure model is loaded
+          httpGet:
+            path: /ready
+            port: {{ .Values.service.httpPort | default 8080 }}
+          initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 20 }}
+          periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 5 }}
+          timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 1 }}
+          successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
+          failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 5 }}
+          {{- else }}
+          # Use standard readiness probe for rolling deployments
 {{ toYaml .Values.readinessProbe | indent 12 }}
+          {{- end }}
         command: {{ .Values.command }}
         resources:
 {{ toYaml .Values.resources | indent 12 }}

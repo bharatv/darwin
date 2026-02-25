@@ -87,6 +87,7 @@ Image Flow for Model Serving:
 - **FastAPI & Ray Serve** - Deploy models using FastAPI or Ray Serve backends
 - **One-Click Deployment** - Deploy MLflow models instantly using pre-built runtime
 - **Lifecycle Management** - Complete deployment lifecycle with versioning and rollback
+- **Advanced Deployment Strategies** - Rolling, canary, and blue-green deployments with Flagger + Istio
 - **Auto-scaling** - Kubernetes HPA with scheduled scaling strategies
 - **Multi-Environment** - Deploy across multiple environments (local, prod, custom)
 - **Artifact Management** - Build and manage deployment artifacts
@@ -746,6 +747,279 @@ For developing ML Serve App independently (outside Darwin ecosystem):
      cd app_layer/src
      uvicorn ml_serve_app_layer.main:app --reload --host 0.0.0.0 --port 8007
      ```
+
+## Development Workflow
+
+## Deployment Strategies
+
+Darwin ML Serve supports three deployment strategies for FastAPI serves, enabling safe, progressive rollouts with zero-downtime deployments.
+
+### Available Strategies
+
+| Strategy | Use Case | Infrastructure | Traffic Shift |
+|----------|----------|----------------|---------------|
+| **Rolling** | Default, safe updates | Kubernetes only | Gradual pod replacement |
+| **Canary** | Gradual rollout with metrics | Istio + Flagger | Progressive traffic % (10→20→30...) |
+| **Blue-Green** | Instant cutover, easy rollback | Istio + Flagger | 0% → 100% switch |
+
+### 1. Rolling Deployment (Default)
+
+Standard Kubernetes rolling update with configurable surge and unavailability.
+
+**When to use:**
+- Default strategy for most deployments
+- No additional infrastructure required
+- Predictable, well-tested behavior
+
+**Configuration:**
+
+```json
+{
+  "deployment_strategy": "rolling",
+  "deployment_strategy_config": {
+    "maxSurge": 1,
+    "maxUnavailable": 0
+  }
+}
+```
+
+**Behavior:**
+- Creates new pods one at a time
+- Waits for readiness before proceeding
+- Terminates old pods after new ones are ready
+- No service mesh required
+
+### 2. Canary Deployment
+
+Progressive traffic shifting with automated or manual promotion gates.
+
+**When to use:**
+- Gradual rollout with quality gates
+- Monitor metrics before full rollout
+- Automated rollback on failure
+
+**Prerequisites:**
+- Istio service mesh installed
+- Flagger controller deployed
+- Prometheus or Datadog for metrics
+
+**Configuration:**
+
+```json
+{
+  "deployment_strategy": "canary",
+  "deployment_strategy_config": {
+    "stepWeight": 10,
+    "maxWeight": 50,
+    "interval": "1m",
+    "threshold": 5,
+    "manualPromotion": true,
+    "metrics": [
+      {
+        "name": "request-success-rate",
+        "thresholdRange": {"min": 99},
+        "interval": "1m"
+      },
+      {
+        "name": "request-duration",
+        "thresholdRange": {"max": 500},
+        "interval": "1m"
+      }
+    ]
+  }
+}
+```
+
+**Parameters:**
+- `stepWeight`: Traffic increment per step (percentage)
+- `maxWeight`: Maximum canary traffic before promotion
+- `interval`: Time between analysis iterations
+- `threshold`: Failed checks before rollback
+- `manualPromotion`: Require manual approval to promote
+- `metrics`: Custom metrics for analysis
+
+**Traffic Progression:**
+
+```
+Deploy v2 → 10% traffic → Wait & analyze → 20% → 30% → ... → 50%
+                ↓                           ↓      ↓           ↓
+           Check metrics              Check metrics       Manual gate
+                ↓                           ↓                   ↓
+            Continue or rollback        Continue          Promote to 100%
+```
+
+**Monitoring Canary:**
+
+```bash
+# Get canary status
+curl -X GET "http://localhost:8000/api/v1/deployment/my-serve/canary-status?env=prod"
+
+# Response:
+{
+  "serve_name": "my-serve",
+  "environment": "prod",
+  "deployment_strategy": "canary",
+  "phase": "Progressing",
+  "canary_weight": 30,
+  "stable_weight": 70,
+  "iterations": 3,
+  "failed_checks": 0,
+  "awaiting_promotion": true
+}
+```
+
+**Manual Promotion:**
+
+```bash
+# Approve canary to continue
+curl -X POST "http://localhost:8000/api/v1/deployment/my-serve/promote" \
+  -H "Content-Type: application/json" \
+  -d '{"env": "prod", "confirm": true}'
+```
+
+### 3. Blue-Green Deployment
+
+Instant cutover with zero-downtime and immediate rollback capability.
+
+**When to use:**
+- Zero-downtime with instant switch
+- Easy rollback if issues detected
+- Testing new version in production before cutover
+
+**Prerequisites:**
+- Same as canary (Istio + Flagger)
+
+**Configuration:**
+
+```json
+{
+  "deployment_strategy": "blue-green",
+  "deployment_strategy_config": {
+    "manualPromotion": true,
+    "promoteAfter": "5m"
+  }
+}
+```
+
+**Behavior:**
+1. New version (green) deployed alongside blue
+2. Green receives 0% traffic (only health checks)
+3. Manual approval required
+4. Instant switch: 0% → 100%
+5. Blue kept for quick rollback
+
+### Rollback
+
+Rollback to previous deployment version:
+
+```bash
+# Rollback to previous version
+curl -X POST "http://localhost:8000/api/v1/deployment/my-serve/rollback" \
+  -H "Content-Type: application/json" \
+  -d '{"env": "prod"}'
+
+# Rollback to specific version
+curl -X POST "http://localhost:8000/api/v1/deployment/my-serve/rollback" \
+  -H "Content-Type: application/json" \
+  -d '{"env": "prod", "target_version": "v1.2.3"}'
+```
+
+### Infrastructure Setup
+
+To enable canary and blue-green deployments:
+
+```bash
+# 1. Install Istio
+./scripts/install-istio.sh
+
+# 2. Install Flagger
+./scripts/install-flagger.sh
+
+# 3. Configure metrics
+./scripts/configure-metrics.sh
+
+# 4. Update environment config in database
+# Set istio_enabled=true and flagger_enabled=true for the environment
+```
+
+### Example Deployment with Strategy
+
+```bash
+# Deploy with canary strategy
+curl -X POST "http://localhost:8000/api/v1/deployment/my-serve/deploy" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "env": "prod",
+    "artifact_version": "v2.0.0",
+    "api_serve_deployment_config": {
+      "deployment_strategy": "canary",
+      "deployment_strategy_config": {
+        "stepWeight": 10,
+        "maxWeight": 50,
+        "interval": "1m",
+        "threshold": 5,
+        "manualPromotion": true
+      }
+    }
+  }'
+
+# Response includes canary management URLs:
+{
+  "service_url": "https://my-serve.darwin.com",
+  "deployment_strategy": "canary",
+  "canary_status_url": "/api/v1/deployment/my-serve/canary-status?env=prod",
+  "promotion_url": "/api/v1/deployment/my-serve/promote"
+}
+```
+
+### Strategy Selection Guide
+
+Choose your deployment strategy based on:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Need instant rollback?                                      │
+│   └─> YES → Blue-Green                                      │
+│   └─> NO  → Continue ↓                                      │
+│                                                              │
+│ Want gradual traffic shifting?                              │
+│   └─> YES → Need metrics-based validation?                  │
+│       └─> YES → Canary with automated checks                │
+│       └─> NO  → Canary with manual promotion                │
+│   └─> NO  → Rolling                                         │
+│                                                              │
+│ Additional infrastructure available?                        │
+│   └─> NO  → Rolling (Kubernetes only)                       │
+│   └─> YES → Canary or Blue-Green (Istio + Flagger)          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Troubleshooting
+
+**Canary stuck in analysis:**
+```bash
+# Check Flagger logs
+kubectl logs -n flagger-system deployment/flagger -f
+
+# Check canary resource
+kubectl get canary -n serve
+kubectl describe canary <canary-name> -n serve
+```
+
+**Metrics not available:**
+```bash
+# Verify Prometheus is accessible
+kubectl port-forward -n monitoring svc/prometheus 9090:9090
+
+# Check MetricTemplates
+kubectl get metrictemplates -n monitoring
+```
+
+**Manual promotion not working:**
+```bash
+# Verify webhook URL is accessible from Flagger
+kubectl exec -n flagger-system deployment/flagger -- curl http://ml-serve-app.darwin/api/v1/deployment/my-serve/promotion-gate
+```
 
 ## Development Workflow
 

@@ -156,20 +156,33 @@ configServer:
   vaultToken: null
 labels: []
 org: dream11
+
+# Deployment strategy configuration
+deploymentStrategy:
+  type: rolling  # rolling | canary | blue-green
+
+# Rolling update parameters
+rollingUpdate:
+  maxSurge: 1
+  maxUnavailable: 0
+
+# Flagger configuration for progressive delivery
 flagger:
-  metrics:
-  - name: sidecar-error-rate-measure
-    thresholdRange:
-      max: 1
-    interval: 1m
   enabled: false
-  type: canary
+  type: canary  # canary | blue-green
   interval: 1m
   threshold: 2
   skipAnalysis: false
   maxWeight: 60
   stepWeight: 20
   iterations: 2
+  progressDeadlineSeconds: 600
+  manualPromotion: false
   maxSurge: 10%
   maxUnavailable: 1
   slackChannel: darwin-serve-alerts
+  metrics:
+  - name: sidecar-error-rate-measure
+    thresholdRange:
+      max: 1
+    interval: 1m
