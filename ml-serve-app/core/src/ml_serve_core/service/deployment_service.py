@@ -27,7 +27,6 @@ from ml_serve_model import Serve, Artifact, Environment, APIServeInfraConfig, Us
     Deployment
 from ml_serve_model.active_deployment import ActiveDeployment
 from ml_serve_model.app_layer_deployments import AppLayerDeployment
-from ml_serve_model.deployment import Deployment
 from loguru import logger
 from ml_serve_model.serve_configs import ServeConfig, WorkflowServeInfraConfig
 from ml_serve_model.enums import BackendType, ServeType, DeploymentStatus
@@ -235,8 +234,12 @@ class DeploymentService:
     ):
         if api_deployment_config is None:
             environment_variables = None
+            deployment_strategy = None
+            deployment_strategy_config = None
         else:
             environment_variables = api_deployment_config.environment_variables
+            deployment_strategy = api_deployment_config.deployment_strategy
+            deployment_strategy_config = api_deployment_config.deployment_strategy_config
         values_json = generate_fastapi_values(
             name=serve.name,
             env=env.name,
@@ -246,6 +249,8 @@ class DeploymentService:
             serve_infra_config=infra_config,
             environment_variables=environment_variables,
             is_environment_protected=env.is_protected,
+            deployment_strategy=deployment_strategy,
+            deployment_strategy_config=deployment_strategy_config,
         )
 
         build_resp = await self.dcm_client.build_resource(
@@ -423,7 +428,15 @@ class DeploymentService:
                 f"Performing full rebuild. Error: {e}"
             )
 
-            # Generate full values (not just infra)
+            # Get existing deployment strategy and env vars from the deployment
+            app_layer_deployment = await AppLayerDeployment.get_or_none(deployment=current_deployment)
+            deployment_strategy = None
+            deployment_strategy_config = None
+            if app_layer_deployment:
+                deployment_strategy = app_layer_deployment.deployment_strategy
+                deployment_strategy_config = app_layer_deployment.deployment_params
+
+            # Generate full values (not just infra), preserving strategy from deployment
             full_values = generate_fastapi_values(
                 name=serve.name,
                 env=env.name,
@@ -433,10 +446,10 @@ class DeploymentService:
                 serve_infra_config=api_serve_config,
                 environment_variables=None,  # Will use existing env vars from deployment
                 is_environment_protected=env.is_protected,
+                deployment_strategy=deployment_strategy,
+                deployment_strategy_config=deployment_strategy_config,
             )
 
-            # Get existing environment variables from the deployment
-            app_layer_deployment = await AppLayerDeployment.get_or_none(deployment=current_deployment)
             if app_layer_deployment and app_layer_deployment.environment_variables:
                 for key, val in app_layer_deployment.environment_variables.items():
                     full_values['envs'][str.upper(key)] = val
@@ -462,6 +475,99 @@ class DeploymentService:
                 f"Successfully rebuilt and redeployed serve '{serve.name}' in environment '{env.name}' "
                 f"with updated infra config"
             )
+
+    async def rollback_api_serve(
+            self,
+            serve: Serve,
+            env: Environment,
+            artifact_version: Optional[str] = None,
+    ) -> dict:
+        """
+        Rollback an API serve deployment.
+
+        - If artifact_version is provided, roll back to that artifact version (must exist as a deployment).
+        - If not provided, roll back to the ActiveDeployment.previous_deployment.
+        """
+        active = await ActiveDeployment.get_or_none(serve=serve, environment=env)
+        if not active:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No active deployment found for serve '{serve.name}' in environment '{env.name}'.",
+            )
+
+        current_deployment: Deployment = await active.deployment
+
+        # Resolve target deployment
+        if artifact_version:
+            target_deployment = await self.get_deployment_from_name_and_env_and_version(
+                serve_name=serve.name,
+                env_name=env.name,
+                artifact_version=artifact_version,
+            )
+            if not target_deployment:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Deployment for serve '{serve.name}' env '{env.name}' version '{artifact_version}' not found.",
+                )
+        else:
+            target_deployment = await active.previous_deployment
+            if not target_deployment:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No previous deployment found to rollback to for serve '{serve.name}' in environment '{env.name}'.",
+                )
+
+        target_artifact: Artifact = await target_deployment.artifact
+        current_artifact: Artifact = await current_deployment.artifact
+
+        # Determine resource ids (one-click uses serve name; regular uses env-name prefix)
+        if current_artifact.image_url == DEFAULT_RUNTIME:
+            current_resource_id = serve.name
+        else:
+            current_resource_id = f"{env.name}-{serve.name}"
+
+        if target_artifact.image_url == DEFAULT_RUNTIME:
+            target_resource_id = serve.name
+        else:
+            target_resource_id = f"{env.name}-{serve.name}"
+
+        target_artifact_id = f"{env.name}-{serve.name}-{target_artifact.version}"
+
+        # Stop then start with target artifact (manual rollback)
+        await self.dcm_client.stop_resource(
+            resource_id=current_resource_id,
+            kube_cluster=env.cluster_name,
+            namespace=env.namespace,
+        )
+        await self.dcm_client.start_resource(
+            resource_id=target_resource_id,
+            artifact_id=target_artifact_id,
+            kube_cluster=env.cluster_name,
+            namespace=env.namespace,
+            darwin_resource=FASTAPI_SERVE_RESOURCE_NAME,
+        )
+
+        # Update DB pointers/statuses
+        async with in_transaction():
+            current_deployment.status = DeploymentStatus.ENDED.value
+            current_deployment.ended_at = datetime.now(timezone.utc)
+            await current_deployment.save()
+
+            target_deployment.status = DeploymentStatus.ACTIVE.value
+            target_deployment.ended_at = None
+            await target_deployment.save()
+
+            active.previous_deployment = current_deployment
+            active.deployment = target_deployment
+            await active.save()
+
+        return {
+            "message": "Rollback initiated successfully",
+            "serve_name": serve.name,
+            "env": env.name,
+            "from_artifact_version": current_artifact.version,
+            "to_artifact_version": target_artifact.version,
+        }
 
     async def redeploy_workflow_serve_with_updated_infra_config(
             self,
@@ -510,238 +616,11 @@ class DeploymentService:
         )
 
     async def deploy_model(self, request: ModelDeploymentRequest, user: User):
-        # Validate model URI exists in MLflow before proceeding
-        is_valid, error_msg = await self.mlflow_client.validate_model_uri(request.model_uri)
-        if not is_valid:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": "Invalid model URI",
-                    "error": error_msg,
-                    "hint": "Please verify the model exists in MLflow and the URI is correct."
-                }
-            )
+        from ml_serve_core.service.one_click_model_service import deploy_one_click_model
 
-        # Get environment from database
-        env = await Environment.get_or_none(name=request.env)
-        if not env:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Environment '{request.env}' not found. Please create it first."
-            )
-
-        env_config = EnvConfig(**env.env_configs)
-        serve_name = request.serve_name  # serve_name is required
-
-        serve = await Serve.get_or_none(name=serve_name)
-        if serve and serve.type != ServeType.API.value:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Serve '{serve_name}' exists but is not of API type."
-            )
-
-        if not serve:
-            serve = await Serve.create(
-                name=serve_name,
-                type=ServeType.API.value,
-                description="Auto-generated serve for one-click deployments",
-                space=self._default_space(user),
-                created_by=user,
-            )
-
-        # Check if this version is already actively deployed
-        active = await ActiveDeployment.get_or_none(serve=serve, environment=env)
-        if active:
-            active_deployment_obj = await active.deployment
-            active_artifact = await active_deployment_obj.artifact
-            if active_artifact.version == request.artifact_version:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Version '{request.artifact_version}' is already deployed for serve '{serve_name}'. "
-                )
-
-        artifact = await Artifact.get_or_none(serve=serve, version=request.artifact_version)
-        if not artifact:
-            artifact = await Artifact.create(
-                serve=serve,
-                version=request.artifact_version,
-                github_repo_url=request.model_uri,
-                image_url=DEFAULT_RUNTIME,
-                created_by=user,
-            )
-        else:
-            artifact.github_repo_url = request.model_uri
-            artifact.image_url = DEFAULT_RUNTIME
-            await artifact.save()
-
-        fast_api_config = {
-            "cores": request.cores,
-            "memory": request.memory,
-            "node_capacity_type": request.node_capacity,
-            "min_replicas": request.min_replicas,
-            "max_replicas": request.max_replicas,
-        }
-
-        api_infra_config = await APIServeInfraConfig.get_or_none(serve=serve, environment=env)
-        if not api_infra_config:
-            api_infra_config = await APIServeInfraConfig.create(
-                serve=serve,
-                environment=env,
-                backend_type=BackendType.FastAPI.value,
-                fast_api_config=fast_api_config,
-                additional_hosts=None,
-                created_by=user,
-                updated_by=user,
-            )
-        else:
-            api_infra_config.fast_api_config = fast_api_config
-            api_infra_config.updated_by = user
-            await api_infra_config.save()
-
-        environment_variables = self._build_one_click_env_vars(request.model_uri, request.artifact_version)
-
-        # Determine optimal storage strategy for model caching
-        try:
-            storage_strategy = await determine_storage_strategy(
-                user_strategy=request.storage_strategy or "auto",
-                model_uri=request.model_uri,
-                mlflow_client=self.mlflow_client,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        values_json = generate_fastapi_values_for_one_click_model_deployment(
-            name=serve.name,
-            env=request.env,
-            runtime=DEFAULT_RUNTIME,
-            env_config=env_config,
-            user_email=user.username,
-            environment_variables=environment_variables,
-            cores=request.cores,
-            memory=request.memory,
-            min_replicas=request.min_replicas,
-            max_replicas=request.max_replicas,
-            node_capacity_type=request.node_capacity,
-            storage_strategy=storage_strategy,
-            model_uri=request.model_uri,
-            model_downloader_image=self.config.model_downloader_image,
-            model_cache_pvc_name=self.config.model_cache_pvc_name,
-            model_cache_path=self.config.model_cache_path,
-            tracking_uri=self.config.mlflow_tracking_uri,
-            tracking_username=self.config.mlflow_tracking_username,
-            tracking_password=self.config.mlflow_tracking_password,
-        )
-
-        artifact_identifier = f"{env.name}-{serve.name}-{artifact.version}"
-
-        await self.dcm_client.build_resource(
-            darwin_resource=FASTAPI_SERVE_RESOURCE_NAME,
-            artifact_id=artifact_identifier,
-            values=values_json,
-            version=FASTAPI_SERVE_CHART_VERSION
-        )
-
-        await self.dcm_client.start_resource(
-            resource_id=serve.name,
-            artifact_id=artifact_identifier,
-            kube_cluster=env_config.cluster_name,
-            namespace=env_config.namespace,
-            darwin_resource=FASTAPI_SERVE_RESOURCE_NAME
-        )
-
-        async with in_transaction():
-            deployment = await Deployment.create(
-                serve=serve,
-                artifact=artifact,
-                environment=env,
-                created_by=user,
-            )
-            await AppLayerDeployment.create(
-                deployment=deployment,
-                deployment_strategy=None,
-                deployment_params=None,
-                environment_variables=environment_variables
-            )
-
-        await self._update_active_deployment(serve, env, deployment)
-
-        return {
-            "service_url": get_service_url_for_one_click(serve.name, env_config)
-        }
+        return await deploy_one_click_model(self, request, user)
 
     async def undeploy_model(self, request: ModelUndeployRequest) -> dict:
-        """
-        Undeploy a one-click model deployment.
+        from ml_serve_core.service.one_click_model_service import undeploy_one_click_model
 
-        This stops the running Kubernetes resource for a model that was deployed
-        via the deploy_model (one-click deployment) API.
-
-        Args:
-            request: ModelUndeployRequest containing serve_name and env
-
-        Returns:
-            dict with status message
-
-        Raises:
-            HTTPException: If environment not found, serve not found, or no active deployment
-        """
-        
-        # 1. Validate environment exists
-        env = await Environment.get_or_none(name=request.env)
-        if not env:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Environment '{request.env}' not found."
-            )
-
-        # 2. Validate serve exists in DB
-        serve_name = request.serve_name
-        serve = await Serve.get_or_none(name=serve_name)
-        if not serve:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Serve '{serve_name}' not found."
-            )
-
-        # 3. Validate active deployment exists
-        active = await ActiveDeployment.get_or_none(serve=serve, environment=env)
-        if not active:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No active deployment found for serve '{serve_name}' in environment '{request.env}'."
-            )
-
-        env_config = EnvConfig(**env.env_configs)
-        
-        # For one-click deployments, resource_id is just the serve_name
-        # (unlike regular serves which use {env.name}-{serve.name})
-        resource_id = serve_name
-
-        # 4. Stop the resource via DCM
-        try:
-            await self.dcm_client.stop_resource(
-                resource_id=resource_id,
-                kube_cluster=env_config.cluster_name,
-                namespace=env_config.namespace,
-            )
-            logger.info(
-                f"Successfully initiated undeploy for model serve '{serve_name}' in environment '{request.env}'")
-        except Exception as e:
-            logger.error(f"Failed to undeploy model serve '{serve_name}': {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to undeploy model: {str(e)}"
-            )
-
-        # 5. Update DB state - mark deployment ENDED and remove active pointer
-        current_deployment = await active.deployment
-        current_deployment.status = DeploymentStatus.ENDED.value
-        current_deployment.ended_at = datetime.now(timezone.utc)
-        await current_deployment.save()
-        await active.delete()
-
-        return {
-            "message": f"Undeploy initiated for model serve '{serve_name}' in environment '{request.env}'",
-            "serve_name": serve_name,
-            "environment": request.env
-        }
+        return await undeploy_one_click_model(self, request)

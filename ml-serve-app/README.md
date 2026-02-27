@@ -242,10 +242,17 @@ Deploy MLflow models directly while auto-creating the necessary serve/artifact m
 ```bash
 POST /api/v1/serve/deploy-model
 {
-  "serve_name": "existing-serve-name",   # Optional; auto-generated if omitted
+  "serve_name": "existing-serve-name",   # Required (1–50 chars). If it doesn't exist, it will be auto-created.
   "artifact_version": "v1",
   "model_uri": "mlflow-artifacts:/45/abc123.../artifacts/model",
   "env": "local",
+  "deployment_strategy": "canary",       # Optional: rolling | canary | blue-green
+  "deployment_strategy_config": {        # Optional: per-strategy config (see below)
+    "stepWeight": 20,
+    "maxWeight": 60,
+    "interval": "1m",
+    "threshold": 2
+  },
   "cores": 4,
   "memory": 8,
   "node_capacity": "spot",
@@ -268,7 +275,7 @@ POST /api/v1/serve/deploy-model
 
 **Notes:**
 - `env` must reference an existing environment created via the environment API.
-- `serve_name` is optional; if it is omitted, ML Serve will create (or reuse) a `<user>-one-click-deployments` serve automatically.
+- `serve_name` is required; if the serve does not exist, ML Serve will create it automatically.
 - `artifact_version` is required so each one-click deployment can be tracked like a standard artifact/serve deployment. It is a deployment label for the one-click serve (not the underlying runtime image tag).
 
 #### Model Requirements for One-Click Deployment
@@ -389,12 +396,114 @@ Stop and remove a model that was deployed via the one-click deployment API:
 POST /api/v1/serve/undeploy-model
 {
   "serve_name": "my-model",
-  "artifact_version": "v1",
   "env": "local"
 }
 ```
 
 This stops the Kubernetes deployment and removes the running pods for the specified model serve.
+
+### Deployment Strategies (Rolling, Canary, Blue-Green)
+
+ML Serve supports optional deployment strategies for **API-based serves** (custom images via `/deploy`) and **one-click model serves** (via `/deploy-model`).
+
+#### Prerequisites (Kubernetes)
+
+- **Rolling**: no extra prerequisites (standard Kubernetes rolling update).
+- **Canary / Blue-Green**: requires **Flagger** installed in the target cluster.
+  - **Kind/local**: use **NGINX Ingress** (recommended). The chart uses `ingressRef` for Flagger when `flagger.provider=nginx`.
+  - **Istio**: supported via `flagger.provider=istio` (uses gateways + hosts).
+  - **AWS ALB-only ingress**: rolling works, but **canary/blue-green traffic shifting will not** unless you also run NGINX Ingress or Istio in production.
+- **Prometheus**: used for Flagger analysis metrics (e.g. `request-success-rate`). This project defaults to **manual-only** rollouts with `skipAnalysis: true`.
+
+> Note on errors: request validation errors are returned as **HTTP 400** in this service (global request validation handler), even though FastAPI commonly uses 422.
+
+#### Strategy values
+
+- **`deployment_strategy`**: `"rolling" | "canary" | "blue-green"`
+- **`deployment_strategy_config`** (optional, strategy-specific):
+  - **rolling**: `maxSurge`, `maxUnavailable`
+  - **canary**: `stepWeight`, `maxWeight`, `interval`, `threshold`
+  - **blue-green**: `iterations`, `interval`, `threshold`
+
+#### Standard deployment (custom images) examples
+
+Rolling:
+
+```bash
+POST /api/v1/serve/{serve_name}/deploy
+{
+  "env": "local",
+  "artifact_version": "v1.0.0",
+  "api_serve_deployment_config": {
+    "deployment_strategy": "rolling",
+    "deployment_strategy_config": {
+      "maxSurge": "10%",
+      "maxUnavailable": 1
+    },
+    "environment_variables": {
+      "MODEL_PATH": "/models/production"
+    }
+  }
+}
+```
+
+Canary:
+
+```bash
+POST /api/v1/serve/{serve_name}/deploy
+{
+  "env": "local",
+  "artifact_version": "v1.0.0",
+  "api_serve_deployment_config": {
+    "deployment_strategy": "canary",
+    "deployment_strategy_config": {
+      "stepWeight": 20,
+      "maxWeight": 60,
+      "interval": "1m",
+      "threshold": 2
+    }
+  }
+}
+```
+
+Blue-Green:
+
+```bash
+POST /api/v1/serve/{serve_name}/deploy
+{
+  "env": "local",
+  "artifact_version": "v1.0.0",
+  "api_serve_deployment_config": {
+    "deployment_strategy": "blue-green",
+    "deployment_strategy_config": {
+      "iterations": 2,
+      "interval": "1m",
+      "threshold": 2
+    }
+  }
+}
+```
+
+#### Rollback (manual)
+
+Rollback to the previous deployment:
+
+```bash
+POST /api/v1/serve/{serve_name}/rollback
+{
+  "env": "local"
+}
+```
+
+Rollback to a specific artifact version:
+
+```bash
+POST /api/v1/serve/{serve_name}/rollback
+{
+  "env": "local",
+  "artifact_version": "v1.0.0"
+}
+```
 
 ### Standard Deployment Workflow (Custom Images)
 

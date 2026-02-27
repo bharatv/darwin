@@ -1,7 +1,7 @@
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, validator, model_validator, field_validator
 from typing import Optional, List, Literal
-from ml_serve_model.enums import BackendType, ServeType
+from ml_serve_model.enums import BackendType, ServeType, DeploymentStrategy
 from ml_serve_core.client.mlflow_client import MLflowClient
 
 
@@ -208,11 +208,63 @@ class ServeConfigRequest(BaseModel):
         return self
 
 
+def _validate_deployment_strategy_config(
+    strategy: Optional[str], config: Optional[dict]
+) -> None:
+    """Validate deployment_strategy_config per strategy. Raises ValueError on invalid."""
+    if strategy is None or config is None:
+        return
+
+    allowed_strategies = {s.value for s in DeploymentStrategy}
+    if strategy not in allowed_strategies:
+        raise ValueError(
+            f"deployment_strategy must be one of: {', '.join(sorted(allowed_strategies))}"
+        )
+
+    if strategy == "rolling":
+        # rolling: maxSurge, maxUnavailable (optional; int/string per K8s)
+        return
+
+    if strategy == "canary":
+        step_weight = config.get("stepWeight")
+        max_weight = config.get("maxWeight")
+        if step_weight is not None:
+            if not isinstance(step_weight, (int, float)) or not (1 <= step_weight <= 100):
+                raise ValueError("stepWeight must be between 1 and 100")
+        if max_weight is not None:
+            if not isinstance(max_weight, (int, float)) or not (1 <= max_weight <= 100):
+                raise ValueError("maxWeight must be between 1 and 100")
+        if step_weight is not None and max_weight is not None:
+            if step_weight > max_weight:
+                raise ValueError("stepWeight cannot be greater than maxWeight")
+        return
+
+    if strategy == "blue-green":
+        iterations = config.get("iterations")
+        if iterations is not None:
+            if not isinstance(iterations, (int, float)) or not (1 <= iterations <= 20):
+                raise ValueError("iterations must be between 1 and 20")
+        return
+
+
 class APIServeDeploymentConfigRequest(BaseModel):
     deployment_strategy: Optional[str] = Field(None, description="Deployment strategy for the API serve.")
     deployment_strategy_config: Optional[dict] = Field(None,
                                                        description="Deployment strategy configuration for the API serve.")
     environment_variables: Optional[dict] = Field(None, description="Environment variables for the API serve.")
+
+    @model_validator(mode="after")
+    def validate_strategy_and_config(self) -> "APIServeDeploymentConfigRequest":
+        if self.deployment_strategy is not None:
+            allowed = {s.value for s in DeploymentStrategy}
+            if self.deployment_strategy not in allowed:
+                raise ValueError(
+                    f"deployment_strategy must be one of: {', '.join(sorted(allowed))}"
+                )
+        _validate_deployment_strategy_config(
+            self.deployment_strategy, self.deployment_strategy_config
+        )
+        return self
 
 
 class WorkflowServeDeploymentConfigRequest(BaseModel):
@@ -291,6 +343,14 @@ class ModelDeploymentRequest(BaseModel):
         ..., min_length=1, description="URI of the model."
     )
     env: str = Field(..., description="Environment name (e.g., 'local', 'prod')")
+    deployment_strategy: Optional[str] = Field(
+        None,
+        description="Deployment strategy (rolling, canary, blue-green). Defaults to rolling when omitted.",
+    )
+    deployment_strategy_config: Optional[dict] = Field(
+        None,
+        description="Strategy-specific configuration (e.g., stepWeight, maxWeight for canary).",
+    )
     storage_strategy: Optional[Literal["auto", "emptydir", "pvc"]] = Field(
         "auto",
         description="Storage strategy for model download: auto (default), emptydir, or pvc.",
@@ -310,6 +370,19 @@ class ModelDeploymentRequest(BaseModel):
     def validate_replica_range(self) -> 'ModelDeploymentRequest':
         if self.min_replicas > self.max_replicas:
             raise ValueError("min_replicas cannot be greater than max_replicas")
+        return self
+
+    @model_validator(mode="after")
+    def validate_deployment_strategy(self) -> 'ModelDeploymentRequest':
+        if self.deployment_strategy is not None:
+            allowed = {s.value for s in DeploymentStrategy}
+            if self.deployment_strategy not in allowed:
+                raise ValueError(
+                    f"deployment_strategy must be one of: {', '.join(sorted(allowed))}"
+                )
+        _validate_deployment_strategy_config(
+            self.deployment_strategy, self.deployment_strategy_config
+        )
         return self
 
     @field_validator("serve_name", mode="before")
@@ -371,6 +444,28 @@ class ModelUndeployRequest(BaseModel):
 
     @field_validator("serve_name", mode="before")
     def strip_whitespace(cls, value):
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class RollbackRequest(BaseModel):
+    """
+    Request to rollback a serve deployment.
+
+    If artifact_version is omitted, rolls back to the previous active deployment (if available).
+    """
+
+    env: str = Field(..., min_length=1, description="Environment name (e.g., 'local', 'prod')")
+    artifact_version: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=50,
+        description="Optional artifact version to rollback to. If omitted, rollback uses previous deployment.",
+    )
+
+    @field_validator("artifact_version", mode="before")
+    def strip_artifact_version(cls, value):
         if isinstance(value, str):
             return value.strip()
         return value

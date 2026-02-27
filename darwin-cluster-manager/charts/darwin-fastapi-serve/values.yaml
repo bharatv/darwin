@@ -157,19 +157,20 @@ configServer:
 labels: []
 org: dream11
 flagger:
-  metrics:
-  - name: sidecar-error-rate-measure
-    thresholdRange:
-      max: 1
-    interval: 1m
   enabled: false
+  provider: nginx
+  progressDeadlineSeconds: 600
   type: canary
   interval: 1m
   threshold: 2
-  skipAnalysis: false
+  skipAnalysis: true
   maxWeight: 60
   stepWeight: 20
   iterations: 2
   maxSurge: 10%
   maxUnavailable: 1
-  slackChannel: darwin-serve-alerts
+  metrics:
+  - name: request-success-rate
+    thresholdRange:
+      min: 99
+    interval: 1m

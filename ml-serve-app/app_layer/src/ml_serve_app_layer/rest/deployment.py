@@ -3,7 +3,7 @@ from typing import Optional, List
 from fastapi import APIRouter
 
 from ml_serve_app_layer.dtos.requests import DeploymentRequest, APIServeDeploymentConfigRequest, \
-    WorkflowServeDeploymentConfigRequest, ModelDeploymentRequest, ModelUndeployRequest
+    WorkflowServeDeploymentConfigRequest, ModelDeploymentRequest, ModelUndeployRequest, RollbackRequest
 from ml_serve_app_layer.utils.auth_utils import AuthorizedUser
 from ml_serve_app_layer.utils.response_util import Response
 from ml_serve_core.service.artifact_service import ArtifactService
@@ -31,6 +31,7 @@ class DeploymentRouter:
     def register_routes(self):
         self.router.post("/{serve_name}/deploy")(self.deploy_artifact)
         self.router.get("/{serve_name}/deployments")(self.get_deployments)
+        self.router.post("/{serve_name}/rollback")(self.rollback_deployment)
         self.router.post("/deploy-model")(self.deploy_model)
         self.router.post("/undeploy-model")(self.undeploy_model)
 
@@ -143,6 +144,38 @@ class DeploymentRouter:
         return await self.deployment_service.deploy_model(
             request,
             user
+        )
+
+    async def rollback_deployment(
+            self,
+            serve_name: str,
+            request: RollbackRequest,
+            user: AuthorizedUser,
+    ) -> JSONResponse:
+        """
+        Rollback an API serve deployment.
+
+        If artifact_version is not provided, roll back to the previous deployment.
+        """
+        serve = await self.serve_service.get_serve_by_name(serve_name)
+        if not serve:
+            return Response.not_found_error_response(f"Serve with name {serve_name} not found")
+        if serve.type != ServeType.API.value:
+            return Response.bad_request_error_response("Rollback is only supported for API serves.")
+
+        env = await self.environment_service.get_environment_by_name(request.env)
+        if not env:
+            return Response.bad_request_error_response(f"Environment with name {request.env} not found")
+
+        result = await self.deployment_service.rollback_api_serve(
+            serve=serve,
+            env=env,
+            artifact_version=request.artifact_version,
+        )
+
+        return Response.success_response(
+            result["message"],
+            result,
         )
 
     async def undeploy_model(

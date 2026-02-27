@@ -4,6 +4,7 @@ kind: Canary
 metadata:
   name: {{ include "service-deployment.fullname" . }}
 spec:
+  {{- $provider := (.Values.flagger.provider | default "nginx") }}
   # deployment reference
   targetRef:
     apiVersion: apps/v1
@@ -11,7 +12,7 @@ spec:
     name: {{ include "service-deployment.fullname" . }}
   # the maximum time in seconds for the canary deployment
   # to make progress before it is rollback (default 600s)
-  progressDeadlineSeconds: {{ .Values.flagger.progressDeadlineSeconds }}
+  progressDeadlineSeconds: {{ .Values.flagger.progressDeadlineSeconds | default 600 }}
   # HPA reference (optional)
   autoscalerRef:
     apiVersion: autoscaling/v2beta2
@@ -22,28 +23,42 @@ spec:
     port: 80
     # container port number or name (optional)
     targetPort: app-port
+    {{- if eq $provider "istio" }}
     # Istio gateways (optional)
     gateways:
+      {{- if .Values.flagger.gateways }}
+      {{- range .Values.flagger.gateways }}
+      - {{ . }}
+      {{- end }}
+      {{- else }}
       - {{ template "service-deployment.fullname" . }}-gateway
+      {{- end }}
     # Istio virtual service host names (optional)
     hosts:
-    {{- range $.Values.ingressInt.hosts }}
-    - {{ . }}
-    {{- end }}
-    {{- range $.Values.ingressExt.hosts }}
-    - {{ . }}
-    {{- end }}
+      {{- range $.Values.ingressInt.hosts }}
+      - {{ . }}
+      {{- end }}
+      {{- range $.Values.ingressExt.hosts }}
+      - {{ . }}
+      {{- end }}
     # Istio traffic policy (optional)
     trafficPolicy:
       tls:
         # use ISTIO_MUTUAL when mTLS is enabled
         mode: DISABLE
-    # Istio retry policy (optional)
+    {{- else if eq $provider "nginx" }}
+    ingressRef:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      name: {{ include "service-deployment.fullname" . }}-{{ .Release.Namespace }}-internal
+    {{- end }}
   analysis:
     # schedule interval (default 60s)
     interval: {{ .Values.flagger.interval }}
     # max number of failed metric checks before rollback
     threshold: {{ .Values.flagger.threshold }}
+    # set true to skip analysis and require manual promotion/rollback
+    skipAnalysis: {{ .Values.flagger.skipAnalysis | default true }}
     # max traffic percentage routed to canary
     # percentage (0-100)
     {{- if eq .Values.flagger.type "canary" }}
@@ -52,31 +67,25 @@ spec:
     # percentage (0-100)
     stepWeight: {{ .Values.flagger.stepWeight }}
     {{- else if eq .Values.flagger.type "immute" }}
-    iterations : {{ .Values.flagger.iterations }}
+    iterations: {{ .Values.flagger.iterations }}
     {{- end }}
     metrics:
     {{- range $value := $.Values.flagger.metrics }}
     - name: {{ $value.name }}
-      templateRef:
-        name: {{ $.Release.Namespace }}-{{ template "service-deployment.fullname" $ }}-{{ $value.name }}
-        namespace: monitoring
       thresholdRange:
+        {{- if and $value.thresholdRange (hasKey $value.thresholdRange "min") }}
+        min: {{ $value.thresholdRange.min }}
+        {{- end }}
+        {{- if and $value.thresholdRange (hasKey $value.thresholdRange "max") }}
         max: {{ $value.thresholdRange.max }}
+        {{- end }}
       interval: {{ $value.interval }}
+      {{- if $value.templateRef }}
+      templateRef:
+        name: {{ $value.templateRef.name }}
+        {{- if $value.templateRef.namespace }}
+        namespace: {{ $value.templateRef.namespace }}
+        {{- end }}
+      {{- end }}
     {{- end }}
----
-apiVersion: flagger.app/v1beta1
-kind: MetricTemplate
-metadata:
-  name: {{ .Release.Namespace }}-{{ template "service-deployment.fullname" . }}-sidecar-error-rate-measure
-  namespace: monitoring
-spec:
-  provider:
-    type: datadog
-    address: https://api.datadoghq.com
-    secretRef:
-      name: datadog-flagger
-  query: |-
-    {{ printf "100-sum:sidecar.istio_requests_total{cluster_name:%s,kube_deployment:%s*,kube_namespace:%s,response_code:2*}/sum:sidecar.istio_requests_total{cluster_name:%s,kube_deployment:%s*,kube_namespace:%s}*100" (.Values.cluster_name) ( include "service-deployment.fullname" .) (.Release.Namespace) (.Values.cluster_name) ( include "service-deployment.fullname" .) (.Release.Namespace)  }}
-
 {{- end }}

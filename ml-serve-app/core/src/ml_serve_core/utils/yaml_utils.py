@@ -1,7 +1,7 @@
 import os
 
 import yaml
-from typing import Optional
+from typing import Optional, Any
 import importlib.resources as pkg_resource
 import ml_serve_core.resources as rs
 from ml_serve_core.config.configs import Config
@@ -117,6 +117,69 @@ def configure_ingress_for_production(
     values['ingressInt']['albLogs']['prefix'] = ALB_LOGS_PREFIX
 
 
+# Default values for canary/blue-green when config omits them
+_DEFAULT_CANARY_STEP_WEIGHT = 20
+_DEFAULT_CANARY_MAX_WEIGHT = 60
+_DEFAULT_INTERVAL = "1m"
+_DEFAULT_THRESHOLD = 2
+_DEFAULT_BLUE_GREEN_ITERATIONS = 2
+_PROMETHEUS_REQUEST_SUCCESS_RATE_METRIC = {
+    "name": "request-success-rate",
+    "thresholdRange": {"min": 99},
+    "interval": "1m",
+}
+
+
+def generate_flagger_values(
+    deployment_strategy: Optional[str],
+    deployment_strategy_config: Optional[dict[str, Any]],
+) -> dict:
+    """
+    Generate flagger block for Helm values based on deployment strategy.
+
+    For rolling or None: returns flagger.enabled=false.
+    For canary/blue-green: returns enabled=true with type, stepWeight, maxWeight,
+    iterations, interval, threshold, skipAnalysis=true, and Prometheus metrics.
+
+    Args:
+        deployment_strategy: One of 'rolling', 'canary', 'blue-green', or None.
+        deployment_strategy_config: Strategy-specific config dict (e.g. stepWeight, maxWeight for canary).
+
+    Returns:
+        Dict with 'flagger' key structure for Helm values merge.
+    """
+    if deployment_strategy is None or deployment_strategy == "rolling":
+        return {"enabled": False}
+
+    config = deployment_strategy_config or {}
+
+    if deployment_strategy == "canary":
+        return {
+            "enabled": True,
+            "type": "canary",
+            "stepWeight": config.get("stepWeight", _DEFAULT_CANARY_STEP_WEIGHT),
+            "maxWeight": config.get("maxWeight", _DEFAULT_CANARY_MAX_WEIGHT),
+            "interval": config.get("interval", _DEFAULT_INTERVAL),
+            "threshold": config.get("threshold", _DEFAULT_THRESHOLD),
+            "skipAnalysis": True,
+            "metrics": [_PROMETHEUS_REQUEST_SUCCESS_RATE_METRIC.copy()],
+        }
+
+    if deployment_strategy == "blue-green":
+        return {
+            "enabled": True,
+            "type": "immute",
+            "iterations": config.get("iterations", _DEFAULT_BLUE_GREEN_ITERATIONS),
+            "interval": config.get("interval", _DEFAULT_INTERVAL),
+            "threshold": config.get("threshold", _DEFAULT_THRESHOLD),
+            "skipAnalysis": True,
+            "metrics": [_PROMETHEUS_REQUEST_SUCCESS_RATE_METRIC.copy()],
+        }
+
+    # Unknown strategy: treat as disabled
+    return {"enabled": False}
+
+
 def generate_fastapi_values_for_one_click_model_deployment(
         name: str,
         env: str,
@@ -137,6 +200,8 @@ def generate_fastapi_values_for_one_click_model_deployment(
         tracking_uri: str,
         tracking_username: str,
         tracking_password: str,
+        deployment_strategy: Optional[str] = None,
+        deployment_strategy_config: Optional[dict[str, Any]] = None,
 ) -> dict:
     with pkg_resource.open_text(rs, FASTAPI_VALUES_TEMPLATE_NAME) as stream:
         stream_content = stream.read()
@@ -202,6 +267,9 @@ def generate_fastapi_values_for_one_click_model_deployment(
         'downloaderImage': model_downloader_image,
         'pvcName': model_cache_pvc_name
     }
+
+    flagger_values = generate_flagger_values(deployment_strategy, deployment_strategy_config)
+    values['flagger'] = {**values.get('flagger', {}), **flagger_values}
     return values
 
 
@@ -213,7 +281,9 @@ def generate_fastapi_values(
         user_email: str,
         serve_infra_config: APIServeInfraConfig,
         environment_variables: Optional[dict[str, str]],
-        is_environment_protected: bool
+        is_environment_protected: bool,
+        deployment_strategy: Optional[str] = None,
+        deployment_strategy_config: Optional[dict[str, Any]] = None,
 ) -> dict:
     with pkg_resource.open_text(rs, FASTAPI_VALUES_TEMPLATE_NAME) as stream:
         stream_content = stream.read()
@@ -273,6 +343,9 @@ def generate_fastapi_values(
         serve_infra_config.fast_api_config_object.memory
     )
     update_node_selector(values, serve_infra_config.fast_api_config_object.node_capacity_type)
+
+    flagger_values = generate_flagger_values(deployment_strategy, deployment_strategy_config)
+    values['flagger'] = {**values.get('flagger', {}), **flagger_values}
     return values
 
 
