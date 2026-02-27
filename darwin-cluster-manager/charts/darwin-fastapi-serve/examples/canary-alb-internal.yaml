@@ -1,0 +1,55 @@
+# Canary deployment with ALB (internal ingress only)
+# This example shows progressive traffic shifting with AWS Load Balancer Controller
+
+deployment:
+  strategy: argo-rollouts
+  rollouts:
+    strategy: canary
+    trafficRouting:
+      provider: alb
+      servicePort: 80
+    canary:
+      steps:
+        - setWeight: 20
+        - pause: {duration: 1m}
+        - setWeight: 40
+        - pause: {duration: 1m}
+        - setWeight: 60
+        - pause: {duration: 1m}
+        - setWeight: 80
+        - pause: {duration: 1m}
+
+# Internal ingress configuration
+ingressInt:
+  enabled: true
+  ingressClass: alb
+  path: "/*"
+  pathType: ImplementationSpecific
+  hosts:
+    - ml-serve-internal.darwin.dream11-k8s.local
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: ml-serve-internal.darwin.dream11-k8s.local
+
+# External ingress disabled for internal-only deployments
+ingressExt:
+  enabled: false
+
+# HPA settings (works with Rollouts)
+hpa:
+  enabled: true
+  maxReplicas: 5
+  cpu: 60
+
+# Application settings
+name: ml-serve-canary-internal
+replicaCount: 2
+image:
+  repository: my-registry/ml-serve
+  tag: v1.0.0
+  pullPolicy: Always
+
+service:
+  enabled: true
+  type: ClusterIP
+  httpPort: 8000
+  externalPort: 80

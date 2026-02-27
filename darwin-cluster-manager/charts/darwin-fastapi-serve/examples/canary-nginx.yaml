@@ -1,0 +1,65 @@
+# Canary deployment with NGINX Ingress Controller
+# This example shows progressive traffic shifting using NGINX ingress
+
+deployment:
+  strategy: argo-rollouts
+  rollouts:
+    strategy: canary
+    trafficRouting:
+      provider: nginx
+      servicePort: 80
+    canary:
+      steps:
+        - setWeight: 20
+        - pause: {duration: 30s}
+        - setWeight: 40
+        - pause: {duration: 30s}
+        - setWeight: 60
+        - pause: {duration: 30s}
+        - setWeight: 80
+        - pause: {duration: 30s}
+
+# Internal ingress with NGINX
+ingressInt:
+  enabled: true
+  ingressClass: nginx
+  namespace: darwin
+  path: "/ml-serve(/|$)(.*)"
+  pathType: ImplementationSpecific
+  hosts:
+    - ml-serve.internal.local
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+
+# External ingress disabled for this example
+ingressExt:
+  enabled: false
+
+# HPA settings
+hpa:
+  enabled: true
+  maxReplicas: 5
+  cpu: 60
+
+# Application settings
+name: ml-serve-canary-nginx
+replicaCount: 2
+image:
+  repository: my-registry/ml-serve
+  tag: v1.0.0
+  pullPolicy: Always
+
+service:
+  enabled: true
+  type: ClusterIP
+  httpPort: 8000
+  externalPort: 80
+
+# Model cache example (optional)
+modelCache:
+  enabled: false
+  strategy: emptydir
+  cachePath: /model-cache
+  modelUri: "models:/my-model/production"
+  trackingUri: "https://mlflow.example.com"

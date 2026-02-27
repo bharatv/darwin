@@ -2,7 +2,8 @@
 {{- $fullName := include "service-deployment.fullname" . -}}
 {{- $ingressPath := .Values.ingressInt.path -}}
 {{- $ingressPathType := .Values.ingressInt.pathType -}}
-{{- $ingressServiceName := include "service-deployment.ingressServiceName" . -}}
+{{- $ingressServiceName := include "service-deployment.ingressBackendServiceName" . -}}
+{{- $useAnnotationPort := and (eq .Values.deployment.strategy "argo-rollouts") (eq .Values.deployment.rollouts.strategy "canary") (eq .Values.deployment.rollouts.trafficRouting.provider "alb") -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -41,7 +42,11 @@ spec:
               service:
                 name: {{ $ingressServiceName }}
                 port:
+                  {{- if $useAnnotationPort }}
+                  name: use-annotation
+                  {{- else }}
                   number: 80
+                  {{- end }}
             pathType: {{ $ingressPathType }}
   {{- end }}
   {{- if not .Values.ingressInt.hosts }}
@@ -52,7 +57,12 @@ spec:
             backend:
               service:
                 name: {{ $ingressServiceName }}
-                port: http
+                port:
+                  {{- if $useAnnotationPort }}
+                  name: use-annotation
+                  {{- else }}
+                  name: http
+                  {{- end }}
   {{- end }}
 {{- end }}
 

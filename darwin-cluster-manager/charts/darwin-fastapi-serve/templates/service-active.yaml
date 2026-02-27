@@ -1,13 +1,14 @@
-{{- if and .Values.service.enabled (eq .Values.deployment.strategy "kubernetes") -}}
+{{- if and (eq .Values.deployment.strategy "argo-rollouts") (eq .Values.deployment.rollouts.strategy "blueGreen") -}}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ template "service-deployment.serviceName" . }}
+  name: {{ include "service-deployment.activeServiceName" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "service-deployment.labels" . | nindent 4 }}
 spec:
   sessionAffinity: None
-  type: {{ .Values.service.type }}
+  type: {{ .Values.service.type | default "ClusterIP" }}
   ports:
     - port: {{ .Values.service.externalPort }}
       targetPort: app-port

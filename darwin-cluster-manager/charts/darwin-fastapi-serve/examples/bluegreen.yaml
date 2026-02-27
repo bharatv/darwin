@@ -1,0 +1,99 @@
+# Blue/Green deployment with manual promotion
+# This example shows blue/green strategy where the new version (green/preview)
+# is deployed and accessible for testing before manually promoting to active (blue)
+
+deployment:
+  strategy: argo-rollouts
+  rollouts:
+    strategy: blueGreen
+    blueGreen:
+      # Manual promotion (operator must explicitly promote after validation)
+      autoPromotionEnabled: false
+      
+      # Optional: Auto-promote after N seconds if no manual action
+      # autoPromotionSeconds: 300
+      
+      # Optional: Keep old version for N seconds after promotion for quick rollback
+      # scaleDownDelaySeconds: 30
+      
+      # Optional: Preview ingress for testing the new version before promotion
+      previewIngress:
+        enabled: true
+        namespace: darwin
+        ingressClass: alb
+        hosts:
+          - ml-serve-preview.darwin.dream11-k8s.local
+        annotations:
+          external-dns.alpha.kubernetes.io/hostname: ml-serve-preview.darwin.dream11-k8s.local
+        path: "/*"
+        pathType: ImplementationSpecific
+
+# Internal ingress (routes to active service)
+ingressInt:
+  enabled: true
+  ingressClass: alb
+  namespace: darwin
+  path: "/*"
+  pathType: ImplementationSpecific
+  hosts:
+    - ml-serve.darwin.dream11-k8s.local
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: ml-serve.darwin.dream11-k8s.local
+  healthcheckPath: "/healthcheck"
+  tags: "Environment=prod, Service=ml-serve-bluegreen"
+
+# External ingress disabled for this example
+ingressExt:
+  enabled: false
+
+# HPA settings (scales both blue and green ReplicaSets)
+hpa:
+  enabled: true
+  maxReplicas: 5
+  cpu: 70
+
+# Application settings
+name: ml-serve-bluegreen
+replicaCount: 2
+image:
+  repository: my-registry/ml-serve
+  tag: v1.0.0
+  pullPolicy: Always
+
+service:
+  enabled: true
+  type: ClusterIP
+  httpPort: 8000
+  externalPort: 80
+
+# PDB for availability
+pdb:
+  enabled: true
+  minAvailable: 1
+
+# Resources
+resources:
+  limits:
+    cpu: 2
+    memory: 4G
+  requests:
+    cpu: 1
+    memory: 2G
+
+---
+# How to use this configuration:
+#
+# 1. Deploy initial version:
+#    helm upgrade --install ml-serve ./darwin-fastapi-serve -f bluegreen.yaml
+#
+# 2. Deploy new version (creates green/preview environment):
+#    helm upgrade ml-serve ./darwin-fastapi-serve -f bluegreen.yaml --set image.tag=v2.0.0
+#
+# 3. Test preview environment:
+#    curl https://ml-serve-preview.darwin.dream11-k8s.local/healthcheck
+#
+# 4. Promote to active (blue becomes green, green becomes blue):
+#    kubectl argo rollouts promote ml-serve-bluegreen -n darwin
+#
+# 5. Rollback if needed (abort promotion):
+#    kubectl argo rollouts abort ml-serve-bluegreen -n darwin

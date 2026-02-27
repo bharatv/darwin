@@ -164,3 +164,96 @@ This ensures:
 {{- $combined := (printf "%s:%s" $deploymentName $modelUri) -}}
 {{- sha256sum $combined -}}
 {{- end }}
+
+{{/*
+==================== Deployment Strategy Helpers ====================
+These helpers support rendering either Kubernetes Deployment or Argo Rollouts Rollout
+based on the deployment.strategy value.
+*/}}
+
+{{/*
+Workload kind: "Deployment" (kubernetes mode) or "Rollout" (argo-rollouts mode)
+*/}}
+{{- define "service-deployment.workloadKind" -}}
+{{- if eq .Values.deployment.strategy "argo-rollouts" -}}
+Rollout
+{{- else -}}
+Deployment
+{{- end -}}
+{{- end }}
+
+{{/*
+Workload name (same as fullname for both modes)
+*/}}
+{{- define "service-deployment.workloadName" -}}
+{{- include "service-deployment.fullname" . -}}
+{{- end }}
+
+{{/*
+==================== Service Naming Helpers ====================
+For Argo Rollouts progressive delivery, we need distinct service names for stable/canary/active/preview.
+*/}}
+
+{{/*
+Stable service name (for Rollouts canary mode)
+*/}}
+{{- define "service-deployment.stableServiceName" -}}
+{{- printf "%s-stable" (include "service-deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
+Canary service name (for Rollouts canary mode)
+*/}}
+{{- define "service-deployment.canaryServiceName" -}}
+{{- printf "%s-canary" (include "service-deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
+Root service name (for ALB traffic routing with use-annotation pattern)
+If deployment.rollouts.trafficRouting.rootService is set, use it; otherwise use stable service
+*/}}
+{{- define "service-deployment.rootServiceName" -}}
+{{- if and (eq .Values.deployment.strategy "argo-rollouts") .Values.deployment.rollouts.trafficRouting.rootService -}}
+{{- .Values.deployment.rollouts.trafficRouting.rootService -}}
+{{- else -}}
+{{- printf "%s-root" (include "service-deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Active service name (for Rollouts blue/green mode)
+*/}}
+{{- define "service-deployment.activeServiceName" -}}
+{{- printf "%s-active" (include "service-deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
+Preview service name (for Rollouts blue/green mode)
+*/}}
+{{- define "service-deployment.previewServiceName" -}}
+{{- printf "%s-preview" (include "service-deployment.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+
+{{/*
+==================== Ingress Backend Service Name ====================
+Returns the correct backend service name for Ingress rules based on deployment strategy.
+- Kubernetes mode: uses the single service (serviceName or fullname)
+- Argo Rollouts canary (ALB): uses the root service
+- Argo Rollouts canary (NGINX): uses the stable service
+- Argo Rollouts blue/green: uses the active service
+*/}}
+{{- define "service-deployment.ingressBackendServiceName" -}}
+{{- if eq .Values.deployment.strategy "argo-rollouts" -}}
+  {{- if eq .Values.deployment.rollouts.strategy "canary" -}}
+    {{- if eq .Values.deployment.rollouts.trafficRouting.provider "alb" -}}
+      {{- include "service-deployment.rootServiceName" . -}}
+    {{- else -}}
+      {{- include "service-deployment.stableServiceName" . -}}
+    {{- end -}}
+  {{- else if eq .Values.deployment.rollouts.strategy "blueGreen" -}}
+    {{- include "service-deployment.activeServiceName" . -}}
+  {{- end -}}
+{{- else -}}
+  {{- include "service-deployment.ingressServiceName" . -}}
+{{- end -}}
+{{- end }}

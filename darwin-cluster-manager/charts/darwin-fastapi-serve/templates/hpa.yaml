@@ -12,8 +12,13 @@ metadata:
     {{- include "service-deployment.labels" . | nindent 4 }}  
 spec:
   scaleTargetRef:
+    {{- if eq .Values.deployment.strategy "argo-rollouts" }}
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    {{- else }}
     apiVersion: apps/v1
     kind: Deployment
+    {{- end }}
     name: {{ template "service-deployment.fullname" . }}
   minReplicas: {{ .Values.replicaCount }}
   maxReplicas: {{ .Values.hpa.maxReplicas }}

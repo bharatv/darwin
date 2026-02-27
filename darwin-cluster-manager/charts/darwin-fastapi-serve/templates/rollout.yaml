@@ -1,6 +1,6 @@
-{{- if eq .Values.deployment.strategy "kubernetes" -}}
-apiVersion: apps/v1
-kind: Deployment
+{{- if eq .Values.deployment.strategy "argo-rollouts" -}}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: {{ template "service-deployment.fullname" . }}
   namespace: {{ .Release.Namespace }}
@@ -9,31 +9,133 @@ metadata:
     {{ $key }}: {{ $value | quote }}
     {{- end }}
   labels:
-    {{- include "service-deployment.labels" . | nindent 8 }}
+    {{- include "service-deployment.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.hpa.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
-  progressDeadlineSeconds: {{ .Values.deployment.kubernetes.progressDeadlineSeconds }}
   revisionHistoryLimit: 10
   selector:
     matchLabels:
       {{- include "service-deployment.selectorLabels" . | nindent 6 }}
+  
+  {{- if eq .Values.deployment.rollouts.strategy "canary" }}
   strategy:
-    {{- if eq .Values.deployment.kubernetes.type "Recreate" }}
-    type: Recreate
-    {{- else }}
-    rollingUpdate:
-      maxSurge: {{ .Values.deployment.kubernetes.rollingUpdate.maxSurge }}
-      maxUnavailable: {{ .Values.deployment.kubernetes.rollingUpdate.maxUnavailable }}
-    type: RollingUpdate
-    {{- end }}
+    canary:
+      {{- if .Values.deployment.rollouts.canary.steps }}
+      steps:
+      {{- range .Values.deployment.rollouts.canary.steps }}
+        {{- if .setWeight }}
+        - setWeight: {{ .setWeight }}
+        {{- else if .pause }}
+        - pause:
+            {{- if .pause.duration }}
+            duration: {{ .pause.duration }}
+            {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
+      
+      # Service references for canary
+      stableService: {{ include "service-deployment.stableServiceName" . }}
+      canaryService: {{ include "service-deployment.canaryServiceName" . }}
+      
+      # Traffic routing configuration
+      trafficRouting:
+        {{- if eq .Values.deployment.rollouts.trafficRouting.provider "alb" }}
+        alb:
+          {{- $fullName := include "service-deployment.fullname" . -}}
+          {{- $rootService := include "service-deployment.rootServiceName" . -}}
+          {{- $servicePort := .Values.deployment.rollouts.trafficRouting.servicePort | default 80 -}}
+          {{- if .Values.deployment.rollouts.trafficRouting.rootService }}
+          rootService: {{ .Values.deployment.rollouts.trafficRouting.rootService }}
+          {{- else }}
+          rootService: {{ $rootService }}
+          {{- end }}
+          servicePort: {{ $servicePort }}
+          {{- if .Values.deployment.rollouts.trafficRouting.annotationPrefix }}
+          annotationPrefix: {{ .Values.deployment.rollouts.trafficRouting.annotationPrefix }}
+          {{- end }}
+          # List of ingresses to manage (both internal and external if enabled)
+          ingresses:
+            {{- if .Values.ingressInt.enabled }}
+            - {{ $fullName }}-{{ .Release.Namespace }}-internal
+            {{- end }}
+            {{- if .Values.ingressExt.enabled }}
+            - {{ $fullName }}-{{ .Release.Namespace }}-external
+            {{- end }}
+        {{- else if eq .Values.deployment.rollouts.trafficRouting.provider "nginx" }}
+        nginx:
+          stableIngresses:
+            {{- $fullName := include "service-deployment.fullname" . -}}
+            {{- if .Values.ingressInt.enabled }}
+            - {{ $fullName }}-{{ .Release.Namespace }}-internal
+            {{- end }}
+            {{- if .Values.ingressExt.enabled }}
+            - {{ $fullName }}-{{ .Release.Namespace }}-external
+            {{- end }}
+        {{- end }}
+      
+      {{- if and .Values.deployment.rollouts.canary.analysis .Values.deployment.rollouts.canary.analysis.enabled }}
+      # Analysis configuration (optional)
+      analysis:
+        templates:
+        {{- range .Values.deployment.rollouts.canary.analysis.templates }}
+        - templateName: {{ .templateName }}
+          {{- if .clusterScope }}
+          clusterScope: {{ .clusterScope }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.deployment.rollouts.canary.analysis.startingStep }}
+        startingStep: {{ .Values.deployment.rollouts.canary.analysis.startingStep }}
+        {{- end }}
+      {{- end }}
+  {{- else if eq .Values.deployment.rollouts.strategy "blueGreen" }}
+  strategy:
+    blueGreen:
+      # Service references for blue/green
+      activeService: {{ include "service-deployment.activeServiceName" . }}
+      previewService: {{ include "service-deployment.previewServiceName" . }}
+      
+      # Promotion behavior
+      autoPromotionEnabled: {{ .Values.deployment.rollouts.blueGreen.autoPromotionEnabled | default false }}
+      
+      {{- if .Values.deployment.rollouts.blueGreen.autoPromotionSeconds }}
+      autoPromotionSeconds: {{ .Values.deployment.rollouts.blueGreen.autoPromotionSeconds }}
+      {{- end }}
+      
+      {{- if .Values.deployment.rollouts.blueGreen.scaleDownDelaySeconds }}
+      scaleDownDelaySeconds: {{ .Values.deployment.rollouts.blueGreen.scaleDownDelaySeconds }}
+      {{- end }}
+      
+      {{- if .Values.deployment.rollouts.blueGreen.scaleDownDelayRevisionLimit }}
+      scaleDownDelayRevisionLimit: {{ .Values.deployment.rollouts.blueGreen.scaleDownDelayRevisionLimit }}
+      {{- end }}
+      
+      {{- if and .Values.deployment.rollouts.blueGreen.analysis .Values.deployment.rollouts.blueGreen.analysis.enabled }}
+      # Analysis configuration (optional)
+      prePromotionAnalysis:
+        templates:
+        {{- range .Values.deployment.rollouts.blueGreen.analysis.templates }}
+        - templateName: {{ .templateName }}
+          {{- if .clusterScope }}
+          clusterScope: {{ .clusterScope }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+  {{- end }}
+  
+  # Pod template (same structure as Deployment)
   template:
     metadata:
       creationTimestamp: null
       labels:
         {{- include "service-deployment.selectorLabels" . | nindent 8 }}
-        role: rolling-update
+        {{- if eq .Values.deployment.rollouts.strategy "canary" }}
+        role: canary-rollout
+        {{- else if eq .Values.deployment.rollouts.strategy "blueGreen" }}
+        role: bluegreen-rollout
+        {{- end }}
         {{- include "service-deployment.labels" . | nindent 8 }}
       annotations:
         {{- include "service-deployment.podAnnotations" . | nindent 8 }}
@@ -48,7 +150,6 @@ spec:
       {{- if .Values.modelCache.enabled }}
       initContainers:
       {{- if eq .Values.modelCache.strategy "emptydir" }}
-      # Init container for emptydir strategy
       - name: model-downloader
         image: {{ .Values.modelCache.downloaderImage }}
         command:
@@ -78,21 +179,17 @@ spec:
           - name: model-storage
             mountPath: {{ .Values.modelCache.cachePath }}
       {{- else }}
-      # Init container for pvc strategy
       - name: wait-for-model
         image: busybox:latest
         command:
           - sh
           - -c
           - |
-            # Model is stored in subdirectory: /model-cache/<cache-key>/model/MLmodel
-            # due to MLflow download structure
             echo "⏳ Waiting for model to be cached at {{ .Values.modelCache.cachePath }}/{{ include "service-deployment.modelCacheKey" . }}/model/MLmodel"
             MODEL_PATH="{{ .Values.modelCache.cachePath }}/{{ include "service-deployment.modelCacheKey" . }}/model/MLmodel"
-            MAX_WAIT=600  # 10 minutes max wait
+            MAX_WAIT=600
             ELAPSED=0
             
-            # First check if PVC mount is accessible
             if [ ! -d "{{ .Values.modelCache.cachePath }}" ]; then
               echo "❌ PVC mount point not accessible. PVC may not be bound."
               echo "   Check: kubectl get pvc {{ .Values.modelCache.pvcName }} -n {{ .Release.Namespace }}"
@@ -196,34 +293,25 @@ spec:
               fieldPath: metadata.labels['tags.datadoghq.com/version']
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
-        # securityContext:
-        #   allowPrivilegeEscalation: false
-        #   readOnlyRootFilesystem: false
         livenessProbe:
-{{ toYaml .Values.livenessProbe | indent 12 }}
+{{ toYaml .Values.livenessProbe | indent 10 }}
         name: {{  template "service-deployment.fullname" . }}
         ports:
         - containerPort: {{ .Values.service.httpPort | default 8080 }}
           name: app-port
           protocol: TCP
         readinessProbe:
-{{ toYaml .Values.readinessProbe | indent 12 }}
+{{ toYaml .Values.readinessProbe | indent 10 }}
         command: {{ .Values.command }}
         resources:
-{{ toYaml .Values.resources | indent 12 }}
+{{ toYaml .Values.resources | indent 10 }}
         {{- if .Values.modelCache.enabled }}
         volumeMounts:
           {{- if eq .Values.modelCache.strategy "emptydir" }}
-          # emptydir strategy: Mount pod-local emptyDir volume
-          # Volume "model-storage" is shared with init container
-          # Model is at root: {{ .Values.modelCache.cachePath }}/
           - name: model-storage
             mountPath: {{ .Values.modelCache.cachePath }}
             readOnly: true
           {{- else }}
-          # pvc strategy: Mount shared PVC
-          # Volume "model-cache" contains all deployments' models
-          # Model is in subdirectory: {{ .Values.modelCache.cachePath }}/<cache-key>/
           - name: model-cache
             mountPath: {{ .Values.modelCache.cachePath }}
             readOnly: true
@@ -231,39 +319,32 @@ spec:
         {{- end }}
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
-          {{- with .Values.nodeSelector }}
+      {{- with .Values.nodeSelector }}
       nodeSelector:
 {{ toYaml . | indent 8 }}
-    {{- end }}
-    {{- with .Values.affinity }}
+      {{- end }}
+      {{- with .Values.affinity }}
       affinity:
 {{ toYaml . | indent 8 }}
-    {{- end }}
-    {{- with .Values.tolerations }}
+      {{- end }}
+      {{- with .Values.tolerations }}
       tolerations:
 {{ toYaml . | indent 8 }}
-    {{- end }}
+      {{- end }}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
-      # securityContext:
-      #   runAsUser: 1000
-      #   runAsGroup: 3000
-      #   fsGroup: 0
       terminationGracePeriodSeconds: 30
       {{- if .Values.modelCache.enabled }}
       volumes:
         {{- if eq .Values.modelCache.strategy "emptydir" }}
-        # ConfigMap: Contains download script for init container
         - name: model-downloader-script
           configMap:
             name: {{ template "service-deployment.fullname" . }}-model-downloader
             defaultMode: 0755
-        # emptyDir: Temporary storage for model (deleted when pod terminates)
         - name: model-storage
           emptyDir: {}
         {{- else }}
-        # PVC: Shared persistent storage across all pods
         - name: model-cache
           persistentVolumeClaim:
             claimName: {{ .Values.modelCache.pvcName }}

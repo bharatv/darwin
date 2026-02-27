@@ -6,6 +6,62 @@ global:
   # When deploying to production, this value should be overridden to false.
   local-k8s: true
 
+# Deployment strategy configuration
+deployment:
+  # Strategy mode: 'kubernetes' (default) or 'argo-rollouts' (progressive delivery)
+  strategy: kubernetes
+  
+  # Kubernetes deployment strategy (when strategy: kubernetes)
+  kubernetes:
+    # Type: 'RollingUpdate' (default) or 'Recreate'
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 10%
+      maxUnavailable: 1
+    progressDeadlineSeconds: 600
+  
+  # Argo Rollouts configuration (when strategy: argo-rollouts)
+  rollouts:
+    # Rollouts strategy: 'canary' or 'blueGreen'
+    strategy: canary
+    
+    # Traffic routing configuration
+    trafficRouting:
+      # Provider: 'alb' (AWS Load Balancer Controller) or 'nginx'
+      provider: alb
+      # Service port for traffic routing (default: 80)
+      servicePort: 80
+      # Root service name (optional, for ALB; defaults to stable service if omitted)
+      rootService: ""
+      # Annotation prefix for ALB (optional, defaults to 'alb.ingress.kubernetes.io')
+      annotationPrefix: ""
+    
+    # Canary-specific configuration
+    canary:
+      # Traffic shift steps (setWeight + pause sequence)
+      steps:
+        - setWeight: 20
+        - pause: {duration: 1m}
+        - setWeight: 40
+        - pause: {duration: 1m}
+        - setWeight: 60
+        - pause: {duration: 1m}
+        - setWeight: 80
+        - pause: {duration: 1m}
+      # Analysis configuration (optional)
+      analysis:
+        enabled: false
+        # metrics: []
+    
+    # Blue/green-specific configuration
+    blueGreen:
+      # Auto-promotion after preview (true) or manual promotion (false)
+      autoPromotionEnabled: false
+      # Preview ingress (optional)
+      previewIngress:
+        enabled: false
+        # hosts: []
+
 replicaCount: 1
 logLevel: info
 name: ml-serve-demo
@@ -156,13 +212,17 @@ configServer:
   vaultToken: null
 labels: []
 org: dream11
+# DEPRECATED: Flagger progressive delivery (Istio-oriented, not aligned with Ingress routing)
+# Use deployment.strategy: argo-rollouts instead for ALB/NGINX progressive delivery
 flagger:
+  # DEPRECATED: Flagger is disabled by default and not recommended for Ingress-based deployments
+  enabled: false
+  # Legacy fields (kept for compatibility, but not actively supported):
   metrics:
   - name: sidecar-error-rate-measure
     thresholdRange:
       max: 1
     interval: 1m
-  enabled: false
   type: canary
   interval: 1m
   threshold: 2
@@ -170,6 +230,7 @@ flagger:
   maxWeight: 60
   stepWeight: 20
   iterations: 2
+  # DEPRECATED: maxSurge/maxUnavailable moved to deployment.kubernetes.rollingUpdate
   maxSurge: 10%
   maxUnavailable: 1
   slackChannel: darwin-serve-alerts
