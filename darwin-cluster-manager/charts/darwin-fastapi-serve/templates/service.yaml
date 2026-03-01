@@ -29,5 +29,9 @@ spec:
       name: grpc
     {{- end }}
   selector:
+    {{- if .Values.service.selector }}
+    {{- toYaml .Values.service.selector | nindent 4 }}
+    {{- else }}
     {{- include "service-deployment.selectorLabels" . | nindent 4 }}
+    {{- end }}
 {{- end }}

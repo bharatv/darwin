@@ -32,6 +32,7 @@ from loguru import logger
 from ml_serve_model.serve_configs import ServeConfig, WorkflowServeInfraConfig
 from ml_serve_model.enums import BackendType, ServeType, DeploymentStatus
 from datetime import datetime, timezone
+from ml_serve_core.service.traffic_manager import TrafficManager
 
 
 class DeploymentService:
@@ -42,6 +43,11 @@ class DeploymentService:
         self.config = Config()  # Centralized configuration
         self.workflow_client = DarwinWorkflowClient()
         self.mlflow_client = MLflowClient()
+
+    def get_traffic_manager(self) -> TrafficManager:
+        tm = TrafficManager()
+        tm.dcm_client = self.dcm_client
+        return tm
 
     @staticmethod
     def _sanitize_identifier(value: str) -> str:
@@ -67,20 +73,42 @@ class DeploymentService:
             env_vars["MLFLOW_TRACKING_PASSWORD"] = self.config.mlflow_tracking_password
         return env_vars
 
-    async def _update_active_deployment(self, serve: Serve, env: Environment, deployment: Deployment):
+    async def _update_active_deployment(
+        self,
+        serve: Serve,
+        env: Environment,
+        deployment: Deployment,
+        *,
+        end_previous: bool = True,
+    ):
         active_deployment = await ActiveDeployment.get_or_none(serve=serve, environment=env)
         if not active_deployment:
             await ActiveDeployment.create(serve=serve, environment=env, deployment=deployment)
             return
 
-        # Mark previous deployment as ENDED
         previous = await active_deployment.deployment
-        previous.status = DeploymentStatus.ENDED.value
-        previous.ended_at = datetime.now(timezone.utc)
-        await previous.save()
+        if end_previous:
+            previous.status = DeploymentStatus.ENDED.value
+            previous.ended_at = datetime.now(timezone.utc)
+            await previous.save()
 
         active_deployment.previous_deployment = previous
         active_deployment.deployment = deployment
+        await active_deployment.save()
+
+    async def set_candidate_deployment(self, *, serve: Serve, env: Environment, deployment: Deployment) -> None:
+        active_deployment = await ActiveDeployment.get_or_none(serve=serve, environment=env)
+        if not active_deployment:
+            # No active pointer exists yet (first deployment). Defer to finalize.
+            return
+        active_deployment.candidate_deployment = deployment
+        await active_deployment.save()
+
+    async def clear_candidate_deployment(self, *, serve: Serve, env: Environment) -> None:
+        active_deployment = await ActiveDeployment.get_or_none(serve=serve, environment=env)
+        if not active_deployment:
+            return
+        active_deployment.candidate_deployment = None
         await active_deployment.save()
 
     async def get_deployment_by_serve_id(self, serve_id: int) -> Optional[list[Deployment]]:
@@ -144,14 +172,36 @@ class DeploymentService:
                 if deployment_request.api_serve_deployment_config is None:
                     deployment_request.api_serve_deployment_config = APIServeDeploymentConfigRequest(
                         environment_variables=api_deployment_obj.environment_variables,
-                        deployment_strategy=api_deployment_obj.deployment_strategy,
-                        deployment_strategy_config=api_deployment_obj.deployment_params
+                        # Backward compatibility:
+                        # If caller didn't specify a strategy, keep legacy deploy behavior.
+                        # We only inherit environment variables (not deployment strategy/config),
+                        # otherwise a previous stored value like "rolling" would unexpectedly
+                        # force strategy orchestration on subsequent deploys.
+                        deployment_strategy=None,
+                        deployment_strategy_config=None,
                     )
                 elif (
                         deployment_request.api_serve_deployment_config.environment_variables is None
                         or deployment_request.api_serve_deployment_config.environment_variables == {}
                 ):
                     deployment_request.api_serve_deployment_config.environment_variables = api_deployment_obj.environment_variables
+
+            if (
+                deployment_request.api_serve_deployment_config
+                and deployment_request.api_serve_deployment_config.deployment_strategy is not None
+            ):
+                # Orchestrated strategy-based deployment: do NOT update ActiveDeployment pointer yet.
+                from ml_serve_core.service.deployment_orchestrator import DeploymentOrchestrator
+                orchestrator = DeploymentOrchestrator(deployment_service=self)
+                api_deployment_resp = await orchestrator.initiate_deployment(
+                    serve=serve,
+                    artifact=artifact,
+                    env=env,
+                    api_infra_config=serve_config,
+                    api_deployment_config=deployment_request.api_serve_deployment_config,
+                    user=user,
+                )
+                return api_deployment_resp
 
             deployment, api_deployment_resp = await self.deploy_api_serve(
                 serve,
@@ -231,7 +281,9 @@ class DeploymentService:
             env: Environment,
             api_deployment_config: APIServeDeploymentConfigRequest,
             infra_config: APIServeInfraConfig,
-            user: User
+            user: User,
+            *,
+            deployment_role: str = "primary",
     ):
         if api_deployment_config is None:
             environment_variables = None
@@ -246,26 +298,50 @@ class DeploymentService:
             serve_infra_config=infra_config,
             environment_variables=environment_variables,
             is_environment_protected=env.is_protected,
+            deployment_role=deployment_role,
+            deployment_version=artifact.version,
+            deployment_strategy=(api_deployment_config.deployment_strategy.value if api_deployment_config and api_deployment_config.deployment_strategy else None),
         )
 
-        build_resp = await self.dcm_client.build_resource(
+        await self._build_and_start_fastapi_release(
             darwin_resource=FASTAPI_SERVE_RESOURCE_NAME,
-            artifact_id=f"{env.name}-{serve.name}-{artifact.version}",
             values=values_json,
-            version=FASTAPI_SERVE_CHART_VERSION
-        )
-
-        start_resp = await self.dcm_client.start_resource(
+            version=FASTAPI_SERVE_CHART_VERSION,
             resource_id=f"{env.name}-{serve.name}",
             artifact_id=f"{env.name}-{serve.name}-{artifact.version}",
             kube_cluster=env.cluster_name,
             namespace=env.namespace,
-            darwin_resource=FASTAPI_SERVE_RESOURCE_NAME
         )
 
         return {
             "service_url": get_service_url(serve.name, env.name, EnvConfig(**env.env_configs), env.is_protected)
         }
+
+    async def _build_and_start_fastapi_release(
+            self,
+            *,
+            darwin_resource: str,
+            version: str,
+            values: dict,
+            resource_id: str,
+            artifact_id: str,
+            kube_cluster: str,
+            namespace: str,
+    ):
+        await self.dcm_client.build_resource(
+            darwin_resource=darwin_resource,
+            artifact_id=artifact_id,
+            values=values,
+            version=version,
+        )
+
+        await self.dcm_client.start_resource(
+            resource_id=resource_id,
+            artifact_id=artifact_id,
+            kube_cluster=kube_cluster,
+            namespace=namespace,
+            darwin_resource=darwin_resource,
+        )
 
     async def deploy_workflow_serve(
             self,

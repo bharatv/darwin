@@ -206,6 +206,12 @@ curl http://localhost:8007/healthcheck
 - **Swagger UI**: http://localhost/ml-serve/docs
 - **Health Check**: http://localhost/ml-serve/healthcheck
 
+### Deployment strategies docs
+
+- `docs/deployment-strategies.md`
+- `docs/operator-runbook-deployments.md`
+- `docs/deployment-strategies-release-plan.md`
+
 ### 3. Create an Environment for Deployments
 
 Before deploying models, create an environment:
@@ -452,13 +458,57 @@ For more control over the deployment process, use Artifact Builder to create cus
      "env": "local",
      "artifact_version": "v1.0.0",
      "api_serve_deployment_config": {
-       "deployment_strategy": "rolling",
        "environment_variables": {
          "MODEL_PATH": "/models/production"
        }
      }
    }
    ```
+
+   This uses the **legacy rolling update** behavior (backward compatible) when `deployment_strategy` is omitted or null.
+
+### Deployment Strategies (Approval-Gated Rollouts)
+
+For safer production rollouts, ML Serve supports **manual approval gates** with these strategies:
+- **canary**: gradual traffic shift via step approvals (e.g. 20% → 50% → 100%)
+- **blue-green**: deploy new version (green), validate, then instant switch on approval
+- **rolling**: enhanced rolling with configurable approval checkpoints (e.g. 50% → 100%)
+
+#### Start a canary deployment
+
+```bash
+POST /api/v1/serve/{serve_name}/deploy
+{
+  "env": "prod",
+  "artifact_version": "v2.0.0",
+  "api_serve_deployment_config": {
+    "deployment_strategy": "canary",
+    "deployment_strategy_config": { "steps": [20, 50, 100] },
+    "environment_variables": { "MODEL_PATH": "/models/production" }
+  }
+}
+```
+
+The response returns a `deployment_id` and the deployment enters an **awaiting approval** phase.
+
+#### Approve / Reject / Rollback / Status
+
+```bash
+# Approve next phase
+POST /api/v1/deployment/{deployment_id}/approve
+{ "notes": "Metrics look good" }
+
+# Reject and rollback to previous version
+POST /api/v1/deployment/{deployment_id}/reject
+{ "rejection_reason": "High error rate observed", "notes": "Rollback requested" }
+
+# Manual rollback (if supported for current phase)
+POST /api/v1/deployment/{deployment_id}/rollback
+{ "notes": "Rollback requested" }
+
+# Check current phase + approval history
+GET /api/v1/deployment/{deployment_id}/status
+```
 
 ### Updating Infrastructure Configuration
 

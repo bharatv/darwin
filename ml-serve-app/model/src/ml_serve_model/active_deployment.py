@@ -20,6 +20,14 @@ class ActiveDeployment(models.Model):
         null=True
     )
 
+    # Candidate deployment during transition phases (canary/blue-green/rolling)
+    candidate_deployment = fields.ForeignKeyField(
+        "models.Deployment",
+        related_name="candidate_active_deployments",
+        on_delete=fields.SET_NULL,
+        null=True,
+    )
+
     environment = fields.ForeignKeyField(
         "models.Environment",
         related_name="deployments",

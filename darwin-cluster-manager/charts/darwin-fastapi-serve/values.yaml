@@ -10,6 +10,16 @@ replicaCount: 1
 logLevel: info
 name: ml-serve-demo
 cluster_name: darwin-prod-eks-cluster
+
+# Deployment strategy metadata (optional; used by ml-serve orchestration)
+# role: primary | canary | green | rolling (unset for backward compatibility)
+role: ""
+# deploymentVersion: typically the artifact version (unset for backward compatibility)
+deploymentVersion: ""
+# deploymentStrategy: canary | blue-green | rolling (optional)
+deploymentStrategy: ""
+# deploymentId: ml-serve deployment DB id (optional)
+deploymentId: ""
 ui:
   color: "#34577c"
   message: ''
@@ -82,6 +92,12 @@ service:
   type: ClusterIP
   httpPort: 8000
   externalPort: 80
+  # Optional override for Service selector.
+  # If set, replaces the default release-specific selector.
+  # Example for multi-release traffic sharing:
+  # selector:
+  #   tags.datadoghq.com/service: my-serve-name
+  selector: {}
 tls:
   enabled: false
 hpa:

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from ml_serve_app_layer.rest import serve, artifact, environment, deployment
+from ml_serve_app_layer.rest import serve, artifact, environment, deployment, deployment_control
 from ml_serve_app_layer.utils.response_util import Response
 from ml_serve_core.artifact_status_poller import ArtifactStatusPoller
 from ml_serve_core.client.mysql_client import MysqlClient
@@ -105,6 +105,7 @@ app.include_router(serve.serve_router, prefix="/api/v1/serve")
 app.include_router(artifact.artifact_router, prefix="/api/v1")
 app.include_router(environment.environment_router, prefix="/api/v1")
 app.include_router(deployment.deployment_router, prefix="/api/v1/serve")
+app.include_router(deployment_control.deployment_control_router, prefix="/api/v1/deployment")
 
 # Initialize OpenTelemetry instrumentation for FastAPI after including all routers
 # This ensures all routes are properly instrumented

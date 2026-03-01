@@ -196,3 +196,34 @@ func ResourceInstanceStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 	logger.InfoR(requestId, "Resource instance status retrieved successfully", zap.Any("response", response))
 }
+
+func UpdateServiceSelector(c *gin.Context) {
+	requestId := c.GetString("requestID")
+
+	var body dto.UpdateServiceSelector
+
+	if err := c.ShouldBindJSON(&body); err != nil {
+		restErr := rest_errors.NewBadRequestError("Invalid request body", err)
+		c.JSON(restErr.Status(), restErr)
+		logger.ErrorR(requestId, "Failed to unmarshal request body", zap.Any("Error", err))
+		return
+	}
+
+	logger.InfoR(requestId, "Updating service selector", zap.Any("body", body))
+	service, restErr := ValidateUpdateServiceSelectorRequest(body)
+	if restErr != nil {
+		c.JSON(restErr.Status(), restErr)
+		logger.ErrorR(requestId, "Failed to validate request", zap.Any("Error", restErr))
+		return
+	}
+
+	response, err := service.UpdateServiceSelector(requestId, body)
+	if err != nil {
+		c.JSON(err.Status(), err)
+		logger.ErrorR(requestId, "Failed to update service selector", zap.Any("Error", err))
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+	logger.InfoR(requestId, "Service selector updated successfully", zap.Any("response", response))
+}

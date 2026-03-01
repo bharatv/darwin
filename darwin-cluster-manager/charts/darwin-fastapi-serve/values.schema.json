@@ -3,6 +3,36 @@
     "type": "object",
     "required": [],
     "properties": {
+        "role": {
+            "type": "string",
+            "enum": [
+                "",
+                "primary",
+                "canary",
+                "green",
+                "rolling"
+            ]
+        },
+        "deploymentVersion": {
+            "type": "string"
+        },
+        "deploymentStrategy": {
+            "type": "string"
+        },
+        "deploymentId": {
+            "type": "string"
+        },
+        "service": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "hpa": {
             "type": "object",
             "required": [

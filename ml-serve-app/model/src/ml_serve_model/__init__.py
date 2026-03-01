@@ -7,4 +7,5 @@ from .artifact_builder_job import ArtifactBuilderJob
 from .active_deployment import ActiveDeployment
 from .serve_configs import APIServeInfraConfig, WorkflowServeInfraConfig
 from .app_layer_deployments import AppLayerDeployment
+from .deployment_phases import DeploymentPhase
 from .workflow_deployment import ScheduledWorkflowDeployment

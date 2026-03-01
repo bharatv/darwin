@@ -95,3 +95,20 @@ func ValidateResourceInstanceStatusRequest(body dto.ResourceInstanceStatus) (ser
 
 	return &service.ResourceInstanceService{}, nil
 }
+
+func ValidateUpdateServiceSelectorRequest(body dto.UpdateServiceSelector) (service.ResourceInstanceInterface, rest_errors.RestErr) {
+	if body.ResourceId == "" {
+		return nil, rest_errors.NewBadRequestError("resource_id is mandatory", nil)
+	}
+	if body.KubeCluster == "" {
+		return nil, rest_errors.NewBadRequestError("kube_cluster is mandatory", nil)
+	}
+	if body.KubeNamespace == "" {
+		return nil, rest_errors.NewBadRequestError("kube_namespace is mandatory", nil)
+	}
+	if body.ServiceSelector == nil || len(body.ServiceSelector) == 0 {
+		return nil, rest_errors.NewBadRequestError("service_selector is mandatory and must be non-empty", nil)
+	}
+
+	return &service.ResourceInstanceService{}, nil
+}

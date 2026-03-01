@@ -135,6 +135,9 @@ def mock_dcm_client():
         }
     }
     client.get_status.return_value = "Running"
+    async def _update_service_selector(*, resource_id: str, kube_cluster: str, namespace: str, service_selector: dict):
+        return {"status": "SUCCESS", "data": {"after_selector": service_selector}}
+    client.update_service_selector = AsyncMock(side_effect=_update_service_selector)
     return client
 
 

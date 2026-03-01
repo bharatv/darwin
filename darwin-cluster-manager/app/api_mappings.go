@@ -48,6 +48,7 @@ func mapAPIs() {
 		resourceInstance.POST("/start", resource_instance.StartResourceInstance)
 		resourceInstance.POST("/stop", resource_instance.StopResourceInstance)
 		resourceInstance.POST("/status", resource_instance.ResourceInstanceStatus)
+		resourceInstance.POST("/update-service", resource_instance.UpdateServiceSelector)
 	}
 
 	router.POST("/execute", command_execute.Execute)

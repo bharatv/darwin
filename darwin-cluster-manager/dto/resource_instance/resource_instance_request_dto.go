@@ -44,3 +44,11 @@ type ResourceInstanceStatus struct {
 	KubeCluster   string `json:"kube_cluster"`
 	KubeNamespace string `json:"kube_namespace"`
 }
+
+// UpdateServiceSelector to patch Service.spec.selector of an Instance's Service
+type UpdateServiceSelector struct {
+	ResourceId       string            `json:"resource_id"`
+	KubeCluster      string            `json:"kube_cluster"`
+	KubeNamespace    string            `json:"kube_namespace"`
+	ServiceSelector  map[string]string `json:"service_selector"`
+}

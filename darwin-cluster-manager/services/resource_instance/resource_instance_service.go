@@ -12,4 +12,5 @@ type ResourceInstanceInterface interface {
 	StartResourceInstance(requestId string, resource dto.StartResourceInstance) (*dto.ResourceInstanceResponse, rest_errors.RestErr)
 	StopResourceInstance(requestId string, resource dto.StopResourceInstance) (*dto.ResourceInstanceResponse, rest_errors.RestErr)
 	ResourceInstanceStatus(requestId string, resource dto.ResourceInstanceStatus) (*dto.ResourceInstanceResponse, rest_errors.RestErr)
+	UpdateServiceSelector(requestId string, resource dto.UpdateServiceSelector) (*dto.ResourceInstanceResponse, rest_errors.RestErr)
 }

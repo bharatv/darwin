@@ -29,3 +29,18 @@ class JobStatus(Enum):
 class DeploymentStatus(Enum):
     ACTIVE = "ACTIVE"
     ENDED = "ENDED"
+
+
+class DeploymentStrategy(Enum):
+    CANARY = "canary"
+    BLUE_GREEN = "blue-green"
+    ROLLING = "rolling"
+
+
+class DeploymentPhaseStatus(Enum):
+    INITIATED = "INITIATED"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"

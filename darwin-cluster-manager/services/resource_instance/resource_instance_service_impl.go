@@ -9,11 +9,16 @@ import (
 	"compute/cluster_manager/utils/logger"
 	"compute/cluster_manager/utils/rest_errors"
 	"compute/cluster_manager/utils/s3_utils"
+	"context"
 	"fmt"
 	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
@@ -24,6 +29,13 @@ const (
 )
 
 type ResourceInstanceService struct{}
+
+// Dependency injection points for tests.
+var (
+	getKubeConfigPath    = kubeconfig_utils.GetKubeConfigPath
+	buildConfigFromFlags = clientcmd.BuildConfigFromFlags
+	newKubeClient        = func(cfg *rest.Config) (kubernetes.Interface, error) { return kubernetes.NewForConfig(cfg) }
+)
 
 func (c *ResourceInstanceService) CreateResourceArtifact(requestId string, resource dto.CreateResourceArtifact) (*dto.ResourceInstanceResponse, rest_errors.RestErr) {
 	chartPath := filepath.Join(ChartPath, resource.DarwinResource)
@@ -246,4 +258,76 @@ func (c *ResourceInstanceService) ResourceInstanceStatus(requestId string, resou
 
 	data := gin.H{"resource_id": resource.ResourceId, "status": resourceInstanceStatus}
 	return &dto.ResourceInstanceResponse{Status: "SUCCESS", Message: "Resource Instance Status Retrieved Successfully", Data: data}, nil
+}
+
+func (c *ResourceInstanceService) UpdateServiceSelector(requestId string, resource dto.UpdateServiceSelector) (*dto.ResourceInstanceResponse, rest_errors.RestErr) {
+	kubeConfigPath, kubeConfigErr := getKubeConfigPath(resource.KubeCluster)
+	if kubeConfigErr != nil {
+		logger.ErrorR(requestId, "Failed to get kubeconfig path", zap.Any("Error", kubeConfigErr))
+		return nil, kubeConfigErr
+	}
+
+	config, err := buildConfigFromFlags("", kubeConfigPath)
+	if err != nil {
+		return nil, rest_errors.NewInternalServerError("Failed to build config from kubeconfig path", err)
+	}
+
+	clientSet, err := newKubeClient(config)
+	if err != nil {
+		return nil, rest_errors.NewInternalServerError("Failed to initiate k8s client", err)
+	}
+
+	// For darwin-fastapi-serve, Service name is the Helm release name (resource_id)
+	serviceName := resource.ResourceId
+
+	svc, err := clientSet.CoreV1().Services(resource.KubeNamespace).Get(context.TODO(), serviceName, metav1.GetOptions{})
+	if err != nil {
+		return nil, rest_errors.NewInternalServerError("Failed to get Service", err)
+	}
+
+	before := map[string]string{}
+	for k, v := range svc.Spec.Selector {
+		before[k] = v
+	}
+
+	// Idempotency
+	if len(before) == len(resource.ServiceSelector) {
+		match := true
+		for k, v := range resource.ServiceSelector {
+			if before[k] != v {
+				match = false
+				break
+			}
+		}
+		if match {
+			data := gin.H{
+				"resource_id":     resource.ResourceId,
+				"service_name":    serviceName,
+				"before_selector": before,
+				"after_selector":  before,
+				"idempotent":      true,
+			}
+			return &dto.ResourceInstanceResponse{Status: "SUCCESS", Message: "Service selector already up to date", Data: data}, nil
+		}
+	}
+
+	svc.Spec.Selector = resource.ServiceSelector
+	updated, err := clientSet.CoreV1().Services(resource.KubeNamespace).Update(context.TODO(), svc, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, rest_errors.NewInternalServerError("Failed to update Service selector", err)
+	}
+
+	after := map[string]string{}
+	for k, v := range updated.Spec.Selector {
+		after[k] = v
+	}
+
+	data := gin.H{
+		"resource_id":     resource.ResourceId,
+		"service_name":    serviceName,
+		"before_selector": before,
+		"after_selector":  after,
+		"idempotent":      false,
+	}
+	return &dto.ResourceInstanceResponse{Status: "SUCCESS", Message: "Service selector updated", Data: data}, nil
 }

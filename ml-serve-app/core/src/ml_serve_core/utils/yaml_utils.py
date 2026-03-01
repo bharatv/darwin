@@ -213,7 +213,14 @@ def generate_fastapi_values(
         user_email: str,
         serve_infra_config: APIServeInfraConfig,
         environment_variables: Optional[dict[str, str]],
-        is_environment_protected: bool
+        is_environment_protected: bool,
+        deployment_role: Optional[str] = None,
+        deployment_version: Optional[str] = None,
+        deployment_strategy: Optional[str] = None,
+        deployment_id: Optional[str] = None,
+        service_enabled: Optional[bool] = None,
+        ingress_enabled: Optional[bool] = None,
+        service_selector: Optional[dict[str, str]] = None,
 ) -> dict:
     with pkg_resource.open_text(rs, FASTAPI_VALUES_TEMPLATE_NAME) as stream:
         stream_content = stream.read()
@@ -273,6 +280,29 @@ def generate_fastapi_values(
         serve_infra_config.fast_api_config_object.memory
     )
     update_node_selector(values, serve_infra_config.fast_api_config_object.node_capacity_type)
+
+    # Optional deployment strategy metadata (chart is backward compatible if unset)
+    if deployment_role is not None:
+        values["role"] = deployment_role
+    if deployment_version is not None:
+        values["deploymentVersion"] = deployment_version
+    if deployment_strategy is not None:
+        values["deploymentStrategy"] = deployment_strategy
+    if deployment_id is not None:
+        values["deploymentId"] = deployment_id
+
+    if service_enabled is not None:
+        values.setdefault("service", {})
+        values["service"]["enabled"] = bool(service_enabled)
+    if ingress_enabled is not None:
+        values.setdefault("ingressInt", {})
+        values["ingressInt"]["enabled"] = bool(ingress_enabled)
+        values.setdefault("ingressExt", {})
+        values["ingressExt"]["enabled"] = bool(ingress_enabled)
+    if service_selector is not None:
+        values.setdefault("service", {})
+        values["service"]["selector"] = service_selector
+
     return values
 
 

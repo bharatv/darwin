@@ -1,7 +1,9 @@
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, validator, model_validator, field_validator
 from typing import Optional, List, Literal
-from ml_serve_model.enums import BackendType, ServeType
+from datetime import datetime
+
+from ml_serve_model.enums import BackendType, ServeType, DeploymentStrategy
 from ml_serve_core.client.mlflow_client import MLflowClient
 
 
@@ -209,10 +211,94 @@ class ServeConfigRequest(BaseModel):
 
 
 class APIServeDeploymentConfigRequest(BaseModel):
-    deployment_strategy: Optional[str] = Field(None, description="Deployment strategy for the API serve.")
+    deployment_strategy: Optional[DeploymentStrategy] = Field(
+        None,
+        description="Deployment strategy for the API serve (canary, blue-green, rolling).",
+    )
     deployment_strategy_config: Optional[dict] = Field(None,
                                                        description="Deployment strategy configuration for the API serve.")
     environment_variables: Optional[dict] = Field(None, description="Environment variables for the API serve.")
+
+    @field_validator("deployment_strategy", mode="before")
+    def normalize_deployment_strategy(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            return normalized or None
+        return value
+
+    @staticmethod
+    def _validate_percent_steps(values: list[int], *, field_name: str):
+        if not values:
+            raise ValueError(f"{field_name} must not be empty")
+        if any((not isinstance(v, int)) for v in values):
+            raise ValueError(f"{field_name} must be a list of integers")
+        if any(v < 1 or v > 100 for v in values):
+            raise ValueError(f"{field_name} values must be between 1 and 100")
+        if values != sorted(values):
+            raise ValueError(f"{field_name} values must be in ascending order")
+        if values[-1] != 100:
+            raise ValueError(f"{field_name} must end with 100")
+
+    @model_validator(mode="after")
+    def validate_strategy_config(self) -> "APIServeDeploymentConfigRequest":
+        if self.deployment_strategy is None:
+            return self
+
+        cfg = self.deployment_strategy_config or {}
+        if not isinstance(cfg, dict):
+            raise ValueError("deployment_strategy_config must be an object")
+
+        if self.deployment_strategy == DeploymentStrategy.CANARY:
+            # Optional (defaults exist); validate if provided
+            steps = cfg.get("steps")
+            if steps is not None:
+                if not isinstance(steps, list):
+                    raise ValueError("deployment_strategy_config.steps must be a list of integers")
+                self._validate_percent_steps(steps, field_name="deployment_strategy_config.steps")
+
+        elif self.deployment_strategy == DeploymentStrategy.ROLLING:
+            # Optional (defaults exist); validate if provided
+            checkpoints = cfg.get("checkpoints")
+            if checkpoints is not None:
+                if not isinstance(checkpoints, list):
+                    raise ValueError("deployment_strategy_config.checkpoints must be a list of integers")
+                self._validate_percent_steps(checkpoints, field_name="deployment_strategy_config.checkpoints")
+
+        elif self.deployment_strategy == DeploymentStrategy.BLUE_GREEN:
+            # No required config today; accept and ignore additional keys.
+            pass
+
+        return self
+
+
+class DeploymentApprovalRequest(BaseModel):
+    notes: Optional[str] = Field(None, description="Optional notes for approving/rejecting a deployment phase.")
+
+
+class DeploymentRejectRequest(BaseModel):
+    rejection_reason: Optional[str] = Field(None, description="Optional rejection reason.")
+    notes: Optional[str] = Field(None, description="Optional notes for rejection/rollback.")
+
+
+class DeploymentPhaseHistoryItem(BaseModel):
+    phase_name: str
+    traffic_weights: Optional[dict] = None
+    approver_username: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+
+class DeploymentStatusResponse(BaseModel):
+    deployment_id: int
+    strategy: Optional[DeploymentStrategy] = None
+    phase: Optional[str] = None
+    requires_approval: bool = False
+    traffic_weights: Optional[dict] = None
+    phase_history: List[DeploymentPhaseHistoryItem] = Field(default_factory=list)
 
 
 class WorkflowServeDeploymentConfigRequest(BaseModel):

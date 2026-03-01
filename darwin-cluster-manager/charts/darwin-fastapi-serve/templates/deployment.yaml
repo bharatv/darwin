@@ -28,7 +28,21 @@ spec:
       creationTimestamp: null
       labels:
         {{- include "service-deployment.selectorLabels" . | nindent 8 }}
-        role: rolling-update
+        {{- if (or .Values.role .Values.deploymentVersion .Values.deploymentStrategy .Values.deploymentId) }}
+        serve.darwin.io/name: {{ .Values.name | quote }}
+        {{- end }}
+        {{- if .Values.role }}
+        deploy.darwin.io/role: {{ .Values.role | quote }}
+        {{- end }}
+        {{- if .Values.deploymentVersion }}
+        deploy.darwin.io/version: {{ .Values.deploymentVersion | quote }}
+        {{- end }}
+        {{- if .Values.deploymentStrategy }}
+        deploy.darwin.io/strategy: {{ .Values.deploymentStrategy | quote }}
+        {{- end }}
+        {{- if .Values.deploymentId }}
+        deploy.darwin.io/id: {{ .Values.deploymentId | quote }}
+        {{- end }}
         {{- include "service-deployment.labels" . | nindent 8 }}
       annotations:
         {{- include "service-deployment.podAnnotations" . | nindent 8 }}

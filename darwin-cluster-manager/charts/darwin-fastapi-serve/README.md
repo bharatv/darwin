@@ -32,6 +32,10 @@ The following tables lists the configurable parameters of the podinfo chart and 
 
 Parameter | Default | Description
 --- | --- | ---
+`role` | `""` | Deployment role label used for strategy rollouts (`primary`, `canary`, `green`, `rolling`). Unset by default for backward compatibility.
+`deploymentVersion` | `""` | Version label applied to Deployment/Pods (typically artifact version)
+`deploymentStrategy` | `""` | Strategy label for tracking (`canary`, `blue-green`, `rolling`)
+`deploymentId` | `""` | ML Serve deployment id label for tracking/audit
 `replicaCount` | `1` | Desired number of pods
 `logLevel` | `info` | Log level: `debug`, `info`, `warn`, `error`, `flat` or `panic`
 `backend` | `None` | Echo backend URL
@@ -59,6 +63,7 @@ Parameter | Default | Description
 `service.grpcPort` | `9999` | ClusterIP gPRC port
 `service.grpcService` | `podinfo` | gPRC service name
 `service.nodePort` | `31198` | NodePort for the HTTP endpoint
+`service.selector` | `{}` | Optional Service selector override (when set, replaces the default release selector)
 `hpa.enabled` | `false` | Enables the Kubernetes HPA
 `hpa.maxReplicas` | `10` | Maximum amount of pods
 `hpa.cpu` | `None` | Target CPU usage per pod

@@ -282,9 +282,8 @@ class TestArtifactDeployment:
             updated_by=test_user
         )
         
-        deployment_config = APIServeDeploymentConfigRequest(
-            deployment_strategy="rolling"
-        )
+        # No strategy -> immediate deploy updates ActiveDeployment
+        deployment_config = APIServeDeploymentConfigRequest(deployment_strategy=None)
         
         deployment_request = DeploymentRequest(
             env="test-env",
@@ -312,6 +311,60 @@ class TestArtifactDeployment:
         deployment = await active.deployment
         artifact = await deployment.artifact
         assert artifact.id == test_artifact.id
+
+    @pytest.mark.asyncio
+    async def test_orchestrated_deploy_does_not_update_active_until_approved(
+        self,
+        db_session,
+        test_user,
+        test_serve,
+        test_artifact,
+        test_environment,
+        mock_dcm_client
+    ):
+        """Strategy-based deploy should not update ActiveDeployment immediately."""
+        service = DeploymentService()
+        service.dcm_client = mock_dcm_client
+
+        infra_config = await APIServeInfraConfig.create(
+            serve=test_serve,
+            environment=test_environment,
+            backend_type=BackendType.FastAPI.value,
+            fast_api_config={
+                "cores": 2,
+                "memory": 4,
+                "min_replicas": 1,
+                "max_replicas": 3,
+                "node_capacity_type": "spot"
+            },
+            created_by=test_user,
+            updated_by=test_user
+        )
+
+        deployment_config = APIServeDeploymentConfigRequest(deployment_strategy="rolling")
+        deployment_request = DeploymentRequest(
+            env="test-env",
+            artifact_version=test_artifact.version,
+            api_serve_deployment_config=deployment_config
+        )
+
+        resp = await service.deploy_artifact(
+            serve=test_serve,
+            artifact=test_artifact,
+            serve_config=infra_config,
+            env=test_environment,
+            deployment_request=deployment_request,
+            user=test_user
+        )
+
+        assert resp is not None
+        assert resp.get("requires_approval") is True
+
+        active = await ActiveDeployment.get_or_none(
+            serve=test_serve,
+            environment=test_environment
+        )
+        assert active is None
 
 
 @pytest.mark.unit

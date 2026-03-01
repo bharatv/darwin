@@ -15,5 +15,10 @@ class AppLayerDeployment(models.Model):
     deployment_params = fields.JSONField(null=True)  # Flexible for any strategy-specific params
     environment_variables = fields.JSONField(null=True)  # Environment variables
 
+    # Deployment orchestration phase tracking (nullable for backward compatibility)
+    phase = fields.CharField(max_length=50, null=True)
+    phase_metadata = fields.JSONField(null=True)
+    requires_approval = fields.BooleanField(null=True)
+
     class Meta:
         table = "app_layer_deployments"
